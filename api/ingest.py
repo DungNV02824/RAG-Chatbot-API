@@ -9,16 +9,22 @@ from service.embedding import embed_text
 
 router = APIRouter()
 
+
 @router.post("/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
     if not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Only .xlsx files supported")
+        raise HTTPException(status_code=400, detail="Chỉ hỗ trợ file .xlsx")
 
     file_bytes = await file.read()
     df = pd.read_excel(BytesIO(file_bytes))
 
-    if df.shape[1] < 2:
-        raise HTTPException(status_code=400, detail="Excel cần ít nhất 2 cột (Q, A)")
+    required_cols = ["A (Câu hỏi)", "B (Trả lời)"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Thiếu cột bắt buộc: {col}"
+            )
 
     db: Session = SessionLocal()
 
@@ -26,18 +32,35 @@ async def upload_excel(file: UploadFile = File(...)):
         count = 0
 
         for _, row in df.iterrows():
-            question = str(row[0]).strip()
-            answer = str(row[1]).strip()
-            raw_meta = str(row[2]).strip() if len(row) > 2 and not pd.isna(row[2]) else None
+            question = str(row.get("A (Câu hỏi)", "")).strip()
+            answer = str(row.get("B (Trả lời)", "")).strip()
 
             if not question or not answer:
                 continue
 
-            content = f"Q: {question}\nA: {answer}"
+            raw_note = row.get("C (Ghi chú)")
+            raw_image = row.get("D(image_url)")
+
+            note = None
+            image_url = None
+
+            if pd.notna(raw_note):
+                raw_note = str(raw_note).strip()
+                if raw_note.lower().startswith("image_url="):
+                    image_url = raw_note.split("=", 1)[1].strip()
+                else:
+                    note = raw_note
+
+            if pd.notna(raw_image):
+                image_url = str(raw_image).strip()
+
+            content = f"Câu hỏi: {question}\nTrả lời: {answer}"
 
             meta = {}
-            if raw_meta and raw_meta.startswith("image_url="):
-                meta["image_url"] = raw_meta.replace("image_url=", "").strip()
+            if note:
+                meta["note"] = note
+            if image_url:
+                meta["image_url"] = image_url
 
             doc = Document(
                 content=content,
@@ -49,6 +72,7 @@ async def upload_excel(file: UploadFile = File(...)):
             count += 1
 
         db.commit()
+
         return {
             "status": "success",
             "rows_embedded": count
