@@ -1,14 +1,17 @@
 from sqlalchemy.orm import Session
 from models.message import Message
 
-def save_message(db: Session, conversation_id: int, role: str, content: str):
+def save_message(db: Session, conversation_id: int, role: str, content: str, is_staff_reply: bool = False, staff_name: str = None):
     msg = Message(
         conversation_id=conversation_id,
         role=role,
-        content=content
+        content=content,
+        is_staff_reply=is_staff_reply,
+        staff_name=staff_name
     )
     db.add(msg)
     db.commit()
+    return msg
 
 
 def get_recent_messages(

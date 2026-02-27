@@ -1,96 +1,69 @@
-import json
 from sqlalchemy import text
 from db.session import SessionLocal
 from service.embedding import embed_text
 
 
-def detect_intent(question: str) -> str:
-    q = question.lower()
-
-    if any(x in q for x in ["hình", "ảnh", "xem", "nhìn"]):
-        return "image"
-
-    if any(x in q for x in ["giá", "bao nhiêu", "tiền"]):
-        return "price"
-
-    return "text"
-
-
 def retrieve_context(question: str, k: int = 5):
-    intent = detect_intent(question)
-    product = detect_product(question)
-    embedding = embed_text(question)
-
-    sql = text("""
-        SELECT content, meta
-        FROM documents
-        ORDER BY embedding <-> CAST(:embedding AS vector)
-        LIMIT :k
-    """)
-
-    session = SessionLocal()
+    db = SessionLocal()
 
     try:
-        rows = session.execute(sql, {
-            "embedding": embedding,
-            "k": k
-        }).fetchall()
+        embedding = embed_text(question)
+
+        sql = text("""
+            SELECT id, content, meta
+            FROM documents
+            ORDER BY embedding <-> CAST(:embedding AS vector)
+            LIMIT :k
+        """)
+
+        rows = db.execute(
+            sql,
+            {"embedding": embedding, "k": k}
+        ).fetchall()
+
+        if not rows:
+            return "", [], []
 
         contexts = []
         images = []
+        related_products = []
 
-        for content, meta in rows:
-            if intent != "image":
-                contexts.append(content)
+        q_lower = question.lower()
 
-            if intent == "image":
-                url, note = extract_image(meta)
+        is_image_intent = any(
+            kw in q_lower
+            for kw in ["hình", "ảnh", "image", "photo"]
+        )
 
-                if not url:
-                    continue
+        # ===== SẢN PHẨM CHÍNH =====
+        main_row = rows[0]
+        contexts.append(main_row.content)
 
-                # 🔥 SIẾT ĐIỀU KIỆN TẠI ĐÂY
-                if product:
-                    if note and product in note.upper():
-                        images.append(url)
-                else:
-                    images.append(url)
+        main_meta = main_row.meta or {}
 
-        return "\n".join(contexts), images
+        # ===== ẢNH (giữ nguyên logic của bạn) =====
+        if is_image_intent:
+            image_url = main_meta.get("image_url")
+            keyword = main_meta.get("keyword", "")
+
+            if image_url and keyword:
+                keyword_lower = keyword.lower()
+                image_url = image_url.replace("image_url=", "").strip()
+
+                if keyword_lower in q_lower or q_lower in keyword_lower:
+                    images.append(image_url)
+
+        # ===== SẢN PHẨM TƯƠNG TỰ =====
+        for row in rows[1:4]:  # lấy 3 sản phẩm tương tự
+            meta = row.meta or {}
+
+            related_products.append({
+                "title": meta.get("title"),
+                "price": meta.get("price"),
+                "image_url": meta.get("image_url")
+            })
+
+        return "\n\n".join(contexts), images, related_products
 
     finally:
-        session.close()
-
-
-import re
-
-def detect_product(question: str):
-    match = re.search(r"sản phẩm\s+([a-zA-Z0-9]+)", question.lower())
-    if match:
-        return match.group(1).upper()
-    return None
-
-
-def extract_image(meta):
-    if not meta:
-        return None, None
-
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except Exception:
-            return None, None
-
-    if not isinstance(meta, dict):
-        return None, None
-
-    note = meta.get("note")
-
-    if meta.get("image_url"):
-        return meta["image_url"].strip(), note
-
-    if note and "image_url=" in note:
-        url = note.split("image_url=")[-1].strip()
-        return url, note
-
-    return None, note
+        db.close()

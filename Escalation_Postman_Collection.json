@@ -1,0 +1,117 @@
+{
+  "info": {
+    "name": "Escalation System Test",
+    "description": "Test collection cho Escalation Chatbot System",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. User Chat - Trigger Escalation",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"message\": \"tôi muốn hỏi về công nghệ UFO rất lạ\",\n  \"anonymous_id\": \"user_test_123\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/chat",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "8000",
+          "path": ["chat"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "2. Get Pending Tickets (for Staff)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://127.0.0.1:8000/escalations/pending?limit=10",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "8000",
+          "path": ["escalations", "pending"],
+          "query": [
+            {
+              "key": "limit",
+              "value": "10"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "3. Update Ticket - Accept & Reply (Staff)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"in_progress\",\n  \"assigned_to\": \"Nhân viên Minh\",\n  \"note\": \"Chào bạn! Tôi là Minh từ team support. Tôi đang tìm hiểu vấn đề của bạn. Vui lòng chờ một chút...\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/escalations/1",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "8000",
+          "path": ["escalations", "1"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "4. Get All Tickets for User",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://127.0.0.1:8000/escalations/user/1",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "8000",
+          "path": ["escalations", "user", "1"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "5. Resolve Ticket (Complete)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"resolved\",\n  \"note\": \"Mình đã giải quyết vấn đề của bạn. Nếu còn câu hỏi gì thêm, hãy liên hệ tôi nhé! 😊\"\n}"
+        },
+        "url": {
+          "raw": "http://127.0.0.1:8000/escalations/1",
+          "protocol": "http",
+          "host": ["127", "0", "0", "1"],
+          "port": "8000",
+          "path": ["escalations", "1"]
+        }
+      },
+      "response": []
+    }
+  ]
+}

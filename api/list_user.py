@@ -1,0 +1,92 @@
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional
+from service.user_service import get_all_users, get_or_create_user_by_anonymous_id, update_user_profile_from_message
+from db.session import SessionLocal
+from sqlalchemy import desc
+from models.message import Message
+from datetime import datetime
+
+router = APIRouter()
+
+# ==================== SAVE USER INFO ====================
+class UserInfoUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+@router.post("/users/{anonymous_id}/update-info")
+def update_user_info(anonymous_id: str, user_data: UserInfoUpdate):
+    """Lưu thông tin người dùng trực tiếp"""
+    db = SessionLocal()
+    try:
+        user = get_or_create_user_by_anonymous_id(db, anonymous_id)
+        
+        update_dict = {
+            'name': user_data.name,
+            'email': user_data.email,
+            'phone': user_data.phone,
+            'address': user_data.address
+        }
+        
+        print(f"💾 Lưu thông tin user {user.id}: {update_dict}")
+        update_user_profile_from_message(db, user, update_dict)
+        db.refresh(user)
+        
+        return {
+            "status": "success",
+            "user_id": user.id,
+            "message": "Thông tin đã được lưu"
+        }
+    except Exception as e:
+        print(f"❌ Lỗi lưu thông tin: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+# ==================== LIST USERS ====================
+@router.get("/users")
+def list_users():
+    db = SessionLocal()
+    try:
+        users = get_all_users()
+        
+        # Format users as JSON objects with all fields
+        formatted_users = []
+        for user in users:
+            # Lấy last message của user từ conversation
+            last_message = ""
+            try:
+                from models.conversation import Conversation
+                conversation = db.query(Conversation).filter(
+                    Conversation.user_id == user.id
+                ).first()
+                
+                if conversation:
+                    last_msg = db.query(Message).filter(
+                        Message.conversation_id == conversation.id
+                    ).order_by(desc(Message.created_at)).first()
+                    
+                    if last_msg:
+                        last_message = last_msg.content[:50] if len(last_msg.content) > 50 else last_msg.content
+            except Exception as e:
+                print(f"Error getting last message for user {user.id}: {e}")
+                last_message = ""
+            
+            formatted_users.append({
+                "id": user.id,
+                "name": user.full_name or "N/A",
+                "email": user.email or "N/A",
+                "phone": user.phone or "N/A",
+                "address": user.address or "N/A",
+                "anonymous_id": user.anonymous_id,
+                "created_at": user.created_at.isoformat() if user.created_at else None,
+                "last_message": last_message,
+                "conversation_id": conversation.id if conversation else None,
+                "disable_bot_response": conversation.disable_bot_response if conversation else False
+            })
+        
+        return formatted_users
+    finally:
+        db.close()

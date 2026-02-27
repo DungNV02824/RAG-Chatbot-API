@@ -18,6 +18,7 @@ async def upload_excel(file: UploadFile = File(...)):
     file_bytes = await file.read()
     df = pd.read_excel(BytesIO(file_bytes))
 
+    # Cột bắt buộc
     required_cols = ["A (Câu hỏi)", "B (Trả lời)"]
     for col in required_cols:
         if col not in df.columns:
@@ -38,29 +39,18 @@ async def upload_excel(file: UploadFile = File(...)):
             if not question or not answer:
                 continue
 
-            raw_note = row.get("C (Ghi chú)")
-            raw_image = row.get("D(image_url)")
-
-            note = None
-            image_url = None
-
-            if pd.notna(raw_note):
-                raw_note = str(raw_note).strip()
-                if raw_note.lower().startswith("image_url="):
-                    image_url = raw_note.split("=", 1)[1].strip()
-                else:
-                    note = raw_note
-
-            if pd.notna(raw_image):
-                image_url = str(raw_image).strip()
+            keyword = row.get("C (Key work)")
+            image_url = row.get("D(image_url)")
 
             content = f"Câu hỏi: {question}\nTrả lời: {answer}"
 
             meta = {}
-            if note:
-                meta["note"] = note
-            if image_url:
-                meta["image_url"] = image_url
+
+            if pd.notna(keyword):
+                meta["keyword"] = str(keyword).strip()
+
+            if pd.notna(image_url):
+                meta["image_url"] = str(image_url).strip()
 
             doc = Document(
                 content=content,
