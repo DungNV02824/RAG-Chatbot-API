@@ -3,10 +3,13 @@ from models.conversation import Conversation
 
 from models.message import Message
 
-def get_or_create_conversation(db, user_id: int):
+def get_or_create_conversation(db, tenant_id: int, user_id: int):
     conversation = (
         db.query(Conversation)
-        .filter(Conversation.user_id == user_id)
+        .filter(
+            Conversation.tenant_id == tenant_id,
+            Conversation.user_id == user_id
+        )
         .order_by(Conversation.created_at.desc())
         .first()
     )
@@ -15,6 +18,7 @@ def get_or_create_conversation(db, user_id: int):
         return conversation
 
     conversation = Conversation(
+        tenant_id=tenant_id,
         user_id=user_id,
         # title="New chat"
     )

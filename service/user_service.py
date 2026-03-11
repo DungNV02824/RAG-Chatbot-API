@@ -174,25 +174,52 @@ def update_user_profile_from_message(db, user, info):
 
 
 
-def get_or_create_user_by_anonymous_id(db, anonymous_id: str):
+# def get_or_create_user_by_anonymous_id(db, anonymous_id: str):
+#     if not anonymous_id:
+#         raise ValueError("anonymous_id is required")
+
+#     user = db.query(User).filter(User.anonymous_id == anonymous_id).first()
+#     if user:
+#         return user
+
+#     user = User(anonymous_id=anonymous_id)
+#     db.add(user)
+#     db.commit()
+#     db.refresh(user)
+#     return user
+
+def get_or_create_user_by_anonymous_id(db, anonymous_id: str, tenant_id: int):
     if not anonymous_id:
         raise ValueError("anonymous_id is required")
 
-    user = db.query(User).filter(User.anonymous_id == anonymous_id).first()
+    user = db.query(User).filter(
+        User.anonymous_id == anonymous_id,
+        User.tenant_id == tenant_id
+    ).first()
+
     if user:
         return user
 
-    user = User(anonymous_id=anonymous_id)
+    user = User(
+        anonymous_id=anonymous_id,
+        tenant_id=tenant_id   # 🔥 QUAN TRỌNG
+    )
     db.add(user)
     db.commit()
     db.refresh(user)
     return user
 
 
-def get_all_users():
+def get_all_users(db, tenant_id: int):
     db = SessionLocal()
     try:
-        users = db.query(User).order_by(User.id.asc()).all()
+        users = db.query(User)\
+            .filter(User.tenant_id == tenant_id)\
+            .order_by(User.id.asc())\
+            .all()
+
         return users
     finally:
         db.close()
+
+

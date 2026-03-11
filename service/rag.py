@@ -3,7 +3,7 @@ from db.session import SessionLocal
 from service.embedding import embed_text
 
 
-def retrieve_context(question: str, k: int = 5):
+def retrieve_context(question: str, tenant_id: int, k: int = 5):
     db = SessionLocal()
 
     try:
@@ -12,21 +12,21 @@ def retrieve_context(question: str, k: int = 5):
         sql = text("""
             SELECT id, content, meta
             FROM documents
+            WHERE tenant_id = :tenant_id
             ORDER BY embedding <-> CAST(:embedding AS vector)
             LIMIT :k
         """)
 
         rows = db.execute(
             sql,
-            {"embedding": embedding, "k": k}
+            {"tenant_id": tenant_id, "embedding": embedding, "k": k}
         ).fetchall()
 
         if not rows:
-            return "", [], []
+            return "", []
 
         contexts = []
         images = []
-        related_products = []
 
         q_lower = question.lower()
 
@@ -35,35 +35,35 @@ def retrieve_context(question: str, k: int = 5):
             for kw in ["hình", "ảnh", "image", "photo"]
         )
 
-        # ===== SẢN PHẨM CHÍNH =====
         main_row = rows[0]
         contexts.append(main_row.content)
-
         main_meta = main_row.meta or {}
 
-        # ===== ẢNH (giữ nguyên logic của bạn) =====
+        if is_image_intent:
+            image_url = main_meta.get("image_url", "").replace("image_url=", "").strip()
+            keyword = main_meta.get("keyword", "")
+
+            if image_url:
+                # Tách keyword thành từng từ riêng lẻ, check từng từ
+                keyword_parts = [k.strip().lower() for k in keyword.split(",")]
+                matched = any(part in q_lower for part in keyword_parts if part)
+
+                if matched:
+                    images.append(image_url)
+
+        # Nếu intent là hỏi về hình ảnh, thì chỉ trả về image_url nếu keyword liên quan đến câu hỏi
         if is_image_intent:
             image_url = main_meta.get("image_url")
             keyword = main_meta.get("keyword", "")
 
-            if image_url and keyword:
-                keyword_lower = keyword.lower()
-                image_url = image_url.replace("image_url=", "").strip()
+            print(f"DEBUG IMAGE:")
+            print(f"  image_url: {image_url}")
+            print(f"  keyword: '{keyword}'")
+            print(f"  q_lower: '{q_lower}'")
+            print(f"  keyword in q_lower: {keyword.lower() in q_lower}")
+            print(f"  q_lower in keyword: {q_lower in keyword.lower()}")
 
-                if keyword_lower in q_lower or q_lower in keyword_lower:
-                    images.append(image_url)
-
-        # ===== SẢN PHẨM TƯƠNG TỰ =====
-        for row in rows[1:4]:  # lấy 3 sản phẩm tương tự
-            meta = row.meta or {}
-
-            related_products.append({
-                "title": meta.get("title"),
-                "price": meta.get("price"),
-                "image_url": meta.get("image_url")
-            })
-
-        return "\n\n".join(contexts), images, related_products
+        return "\n\n".join(contexts), images
 
     finally:
         db.close()

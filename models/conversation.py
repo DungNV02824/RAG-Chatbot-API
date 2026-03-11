@@ -6,6 +6,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
 
     order_step = Column(String(50), nullable=True)

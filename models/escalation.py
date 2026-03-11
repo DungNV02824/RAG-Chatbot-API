@@ -19,3 +19,4 @@ class Escalation(Base):
     
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    tenant_id = Column(Integer, nullable=False, index=True)

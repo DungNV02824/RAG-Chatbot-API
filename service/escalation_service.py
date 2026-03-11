@@ -3,7 +3,7 @@ from models.escalation import Escalation
 from datetime import datetime
 
 
-def create_escalation(db: Session, conversation_id: int, user_id: int, reason: str, last_message: str):
+def create_escalation(db: Session, conversation_id: int, user_id: int, reason: str, last_message: str, tenant_id: int = None):
     """
     Tạo ticket escalation khi cần chuyển nhân viên thực
     
@@ -13,13 +13,24 @@ def create_escalation(db: Session, conversation_id: int, user_id: int, reason: s
         user_id: ID khách hàng
         reason: Lý do escalate (not_found, customer_request, error)
         last_message: Tin nhắn cuối cùng từ khách
+        tenant_id: ID tenant (bắt buộc)
     """
+    # Nếu không có tenant_id, lấy từ conversation
+    if not tenant_id and conversation_id:
+        from models.conversation import Conversation
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id
+        ).first()
+        if conversation:
+            tenant_id = conversation.tenant_id
+    
     escalation = Escalation(
         conversation_id=conversation_id,
         user_id=user_id,
         reason=reason,
         last_message=last_message,
-        status="pending"
+        status="pending",
+        tenant_id=tenant_id
     )
     
     db.add(escalation)

@@ -4,6 +4,8 @@ from typing import Optional, List
 from datetime import datetime
 from db.session import SessionLocal
 from models.escalation import Escalation
+from dto.staff_reply_dto import UpdateEscalationRequest, StaffReplyRequest, EscalationResponse
+
 from service.escalation_service import (
     get_pending_escalations,
     update_escalation,
@@ -13,21 +15,8 @@ from service.message_service import save_message
 
 router = APIRouter()
 
-
-class EscalationResponse(BaseModel):
-    id: int
-    conversation_id: int
-    user_id: int
-    reason: str
-    last_message: str
-    status: str
-    assigned_to: Optional[str] = None
-    note: Optional[str] = None
-    created_at: str
-    updated_at: Optional[str] = None
-
-    class Config:
-        from_attributes = True
+class Config:
+    from_attributes = True
 
     @field_validator('created_at', 'updated_at', mode='before')
     @classmethod
@@ -35,18 +24,6 @@ class EscalationResponse(BaseModel):
         if isinstance(v, datetime):
             return v.isoformat()
         return v
-
-
-class UpdateEscalationRequest(BaseModel):
-    status: str
-    assigned_to: Optional[str] = None
-    note: Optional[str] = None
-    reply: Optional[str] = None  # Phản hồi trực tiếp từ staff
-
-
-class StaffReplyRequest(BaseModel):
-    message: str
-    assigned_to: Optional[str] = None
 
 
 @router.get("/escalations/pending", response_model=List[EscalationResponse])
@@ -120,18 +97,39 @@ def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
         ).first()
         
         if not escalation:
+            print(f" Escalation #{escalation_id} not found")
             raise HTTPException(status_code=404, detail="Escalation not found")
         
+        print(f" Processing staff reply for escalation #{escalation_id}")
+        print(f"   - Conversation ID: {escalation.conversation_id}")
+        print(f"   - Staff: {req.assigned_to}")
+        print(f"   - Message: {req.message[:50]}..." if len(req.message) > 50 else f"   - Message: {req.message}")
+        
         # Lưu message vào conversation với flag staff_reply
-        save_message(db, escalation.conversation_id, "assistant", req.message, is_staff_reply=True, staff_name=req.assigned_to)
+        try:
+            message = save_message(db, escalation.conversation_id, "assistant", req.message, is_staff_reply=True, staff_name=req.assigned_to)
+            print(f" Message #{message.id} saved to conversation #{escalation.conversation_id}")
+        except Exception as msg_error:
+            print(f" Error saving message: {msg_error}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Cập nhật escalation status
         if req.assigned_to:
             escalation.assigned_to = req.assigned_to
         escalation.status = "in_progress"
         escalation.note = req.message
-        db.commit()
-        db.refresh(escalation)
+        
+        try:
+            db.commit()
+            db.refresh(escalation)
+            print(f" Escalation #{escalation_id} updated successfully")
+        except Exception as commit_error:
+            print(f" Error committing escalation update: {commit_error}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         return {
             "success": True,
@@ -145,6 +143,9 @@ def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
         raise
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f" Error in staff_reply_to_customer: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
     finally:
         db.close()
