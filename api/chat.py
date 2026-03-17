@@ -27,7 +27,7 @@ router = APIRouter()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-@router.post("/chat")
+@router.post("/chat",  tags=["chat"])
 def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_id)):
     db = SessionLocal()
 
