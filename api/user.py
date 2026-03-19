@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from service.user_service import get_all_users, get_or_create_user_by_anonymous_id, update_user_profile_from_message
@@ -6,18 +6,11 @@ from db.session import SessionLocal
 from middleware.api_key import get_current_tenant_id
 from sqlalchemy import desc
 from models.message import Message
-from datetime import datetime
+from dto.user_dto import UserInfoUpdate
 
 router = APIRouter()
 
-# ==================== SAVE USER INFO ====================
-class UserInfoUpdate(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[str] = None
-
-@router.post("/users/{anonymous_id}/update-info")
+@router.post("/users/{anonymous_id}/update-info",tags=["User"])
 def update_user_info(anonymous_id: str, user_data: UserInfoUpdate, tenant_id: int = Depends(get_current_tenant_id)):
     """Lưu thông tin người dùng trực tiếp"""
     db = SessionLocal()
@@ -46,8 +39,7 @@ def update_user_info(anonymous_id: str, user_data: UserInfoUpdate, tenant_id: in
     finally:
         db.close()
 
-#LIST USERS 
-@router.get("/users")
+@router.get("/users", tags=["User"])
 def list_users(tenant_id: int = Depends(get_current_tenant_id)):
     db = SessionLocal()
     try:

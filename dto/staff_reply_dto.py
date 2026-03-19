@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
-
+from datetime import datetime
 
 class StaffReplyDTO(BaseModel):
     conversation_id: int
@@ -27,5 +27,5 @@ class EscalationResponse(BaseModel):
     status: str
     assigned_to: Optional[str] = None
     note: Optional[str] = None
-    created_at: str
-    updated_at: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime

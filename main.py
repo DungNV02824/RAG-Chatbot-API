@@ -1,11 +1,12 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from middleware.api_key import api_key_middleware
-from api.ingest import router as ingest_router
+from api.data_upload import router as ingest_router
 from api.chat import router as chat_router
-from api.list_user import router as user_router
+from api.user import router as user_router
 from api.escalation import router as escalation_router
 from api.tenant import router as tenant_router
+from api.staff import router as staff_router
 
 app = FastAPI()
 
@@ -15,7 +16,7 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*", "x-api-key"], # Đảm bảo cho phép x-api-key
+    allow_headers=["*", "x-api-key"], 
 )
 
 # 2. Middleware Check API Key
@@ -39,6 +40,7 @@ app.include_router(chat_router)
 app.include_router(user_router)
 app.include_router(escalation_router)
 app.include_router(tenant_router)
+app.include_router(staff_router)
 
 @app.get("/health")
 def health():

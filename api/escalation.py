@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException
-from pydantic import BaseModel, field_validator
-from typing import Optional, List
+from pydantic import field_validator
+from typing import List
 from datetime import datetime
 from db.session import SessionLocal
 from models.escalation import Escalation
@@ -26,7 +26,7 @@ class Config:
         return v
 
 
-@router.get("/escalations/pending", response_model=List[EscalationResponse])
+@router.get("/escalations/pending", response_model=List[EscalationResponse], tags=["Escalation"])
 def get_pending_tickets(limit: int = Query(10, ge=1, le=100)):
     """
     Lấy danh sách ticket escalation chờ xử lý
@@ -39,7 +39,7 @@ def get_pending_tickets(limit: int = Query(10, ge=1, le=100)):
         db.close()
 
 
-@router.put("/escalations/{escalation_id}", response_model=EscalationResponse)
+@router.put("/escalations/{escalation_id}", response_model=EscalationResponse, tags=["Escalation"])
 def update_ticket(escalation_id: int, req: UpdateEscalationRequest):
     """
     Cập nhật status escalation ticket
@@ -66,7 +66,7 @@ def update_ticket(escalation_id: int, req: UpdateEscalationRequest):
         db.close()
 
 
-@router.get("/escalations/user/{user_id}", response_model=List[EscalationResponse])
+@router.get("/escalations/user/{user_id}", response_model=List[EscalationResponse], tags=["Escalation"])
 def get_user_escalations(user_id: int):
     """
     Lấy tất cả escalation của một khách hàng
@@ -78,9 +78,10 @@ def get_user_escalations(user_id: int):
     finally:
         db.close()
 
-@router.post("/escalations/{escalation_id}/reply")
+@router.post("/escalations/{escalation_id}/reply",tags=["Escalation"])
 def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
     """
+    Staff trả lời khách
     Nhân viên gửi phản hồi trực tiếp cho khách hàng
     Message sẽ được lưu vào conversation và hiển thị ngay trên UI
     

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from io import BytesIO
 import pandas as pd
@@ -11,7 +11,7 @@ from db.session import get_db
 router = APIRouter()
 
 
-@router.post("/upload-excel")
+@router.post("/upload-excel", tags=["Data Upload"])
 async def upload_excel(file: UploadFile = File(...), tenant_id: int = Depends(get_current_tenant_id)):
     if not file.filename.endswith(".xlsx"):
         raise HTTPException(status_code=400, detail="Chỉ hỗ trợ file .xlsx")
@@ -74,7 +74,7 @@ async def upload_excel(file: UploadFile = File(...), tenant_id: int = Depends(ge
     finally:
         db.close()
 
-@router.delete("/documents/clear")
+@router.delete("/documents/clear", tags=["Data Upload"])
 def clear_tenant_documents(
     tenant_id: int = Depends(get_current_tenant_id), # Lấy ID từ Header x-api-key
     db: Session = Depends(get_db)

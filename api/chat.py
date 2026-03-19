@@ -1,7 +1,5 @@
 from openai import OpenAI
 from fastapi import APIRouter, Query, HTTPException, Depends, Request
-from pydantic import BaseModel
-from typing import Optional
 
 from core.config import OPENAI_API_KEY, CHAT_MODEL
 from db.session import SessionLocal
@@ -16,18 +14,16 @@ from service.message_service import (
     get_recent_messages,
     build_chat_history_text
 )
-from service.order_state_service import update_user_by_order_step
-from service.order_flow import get_next_order_step, get_order_step_question
-from service.order_validator import is_answer_for_order_step
+ 
 from service.escalation_service import create_escalation, get_active_escalation
 
-from dto.chat_dto import ChatRequestDTO, StaffReplyRequestDTO, DisableBotRequest
+from dto.chat_dto import ChatRequestDTO, DisableBotRequest
 
 router = APIRouter()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-@router.post("/chat",  tags=["chat"])
+@router.post("/chat",  tags=["Chat"])
 def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_id)):
     db = SessionLocal()
 
@@ -247,7 +243,7 @@ Trả lời tự nhiên, như người thực, dựa HOÀN TOÀN trên thông ti
         db.close()
 
 
-@router.get("/chat/history/{anonymous_id}", tags=["chat"])
+@router.get("/chat/history/{anonymous_id}", tags=["Chat"])
 def get_chat_history(anonymous_id: str, tenant_id: int = Depends(get_current_tenant_id), limit: int = Query(10, ge=1, le=100)):
     """
     Lấy lịch sử chat (recent messages) của user
@@ -271,7 +267,7 @@ def get_chat_history(anonymous_id: str, tenant_id: int = Depends(get_current_ten
         
         messages = get_recent_messages(db, conversation.id, limit=limit)
         result = []
-        for msg in reversed(messages):  # Reverse để oldest message first
+        for msg in reversed(messages):  
             msg_dict = {
                 "role": msg.role,
                 "content": msg.content,
@@ -291,7 +287,7 @@ def get_chat_history(anonymous_id: str, tenant_id: int = Depends(get_current_ten
         db.close()
 
 
-@router.get("/chat/conversation/{conversation_id}", tags=["chat"])
+@router.get("/chat/conversation/{conversation_id}", tags=["Chat"])
 def get_conversation_messages(conversation_id: int, tenant_id: int = Depends(get_current_tenant_id), limit: int = Query(50, ge=1, le=100)):
     """
     Lấy lịch sử chat của một cuộc hội thoại (conversation)
@@ -340,386 +336,7 @@ def get_conversation_messages(conversation_id: int, tenant_id: int = Depends(get
         db.close()
 
 
-# =========================================================
-# ===== STAFF SUPPORT ENDPOINTS ===========================
-# =========================================================
-
-@router.get("/staff/escalations")
-def get_escalations_list(tenant_id: int = Depends(get_current_tenant_id), status: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=100)):
-    """
-    Lấy danh sách tất cả escalation tickets cần hỗ trợ cho tenant
-    
-    Query params:
-        - status: 'pending', 'in_progress', 'resolved' (nếu không có thì lấy tất cả)
-        - limit: số lượng ticket tối đa
-    
-    Response:
-    {
-        "escalations": [
-            {
-                "id": 1,
-                "conversation_id": 100,
-                "user_id": 5,
-                "type": "not_found",
-                "status": "pending",
-                "reason": "Khách hỏi điều gì không có trong DB",
-                "customer_message": "...",
-                "created_at": "...",
-                "assigned_to": null,
-                "user_info": {
-                    "name": "Nguyễn Văn A",
-                    "email": "a@example.com",
-                    "phone": "0123456789"
-                }
-            }
-        ]
-    }
-    """
-    from models.escalation import Escalation
-    from models.user import User
-    from models.conversation import Conversation
-    
-    db = SessionLocal()
-    try:
-        query = db.query(Escalation).join(Conversation).filter(
-            Conversation.tenant_id == tenant_id
-        ).order_by(Escalation.created_at.desc())
-        
-        if status:
-            query = query.filter(Escalation.status == status)
-        
-        escalations = query.limit(limit).all()
-        
-        result = []
-        for esc in escalations:
-            user = db.query(User).filter(User.id == esc.user_id).first()
-            conversation = db.query(Conversation).filter(Conversation.id == esc.conversation_id).first()
-            result.append({
-                "id": esc.id,
-                "conversation_id": esc.conversation_id,
-                "user_id": esc.user_id,
-                "type": esc.reason,  # 'not_found', 'customer_request', 'new_order_request'
-                "status": esc.status,
-                "reason": esc.reason,
-                "customer_message": esc.last_message,  # Message từ khách
-                "created_at": esc.created_at.isoformat() if esc.created_at else None,
-                "assigned_to": esc.assigned_to,
-                "disable_bot_response": conversation.disable_bot_response if conversation else False,
-                "user_info": {
-                    "id": user.id,
-                    "name": user.full_name,
-                    "email": user.email,
-                    "phone": user.phone,
-                    "address": user.address
-                } if user else None
-            })
-        
-        return {"escalations": result}
-    finally:
-        db.close()
-
-
-@router.get("/staff/escalation/{escalation_id}")
-def get_escalation_detail(escalation_id: int, tenant_id: int = Depends(get_current_tenant_id)):
-    """
-    Xem chi tiết một escalation ticket và lịch sử chat
-    
-    Response:
-    {
-        "escalation": {
-            "id": 1,
-            "conversation_id": 100,
-            "status": "pending",
-            "type": "not_found",
-            "created_at": "...",
-            "assigned_to": "Nhân viên A"
-        },
-        "user": {
-            "id": 5,
-            "name": "Nguyễn Văn A",
-            "email": "a@example.com",
-            "phone": "0123456789",
-            "address": "123 Đường ABC"
-        },
-        "messages": [
-            {"role": "user", "content": "...", "created_at": "...", "is_staff_reply": false},
-            {"role": "assistant", "content": "...", "created_at": "...", "is_staff_reply": false},
-            ...
-        ]
-    }
-    """
-    from models.escalation import Escalation
-    from models.user import User
-    from models.conversation import Conversation
-    
-    db = SessionLocal()
-    try:
-        # Join với conversation để verify tenant
-        escalation = db.query(Escalation).join(Conversation).filter(
-            Escalation.id == escalation_id,
-            Conversation.tenant_id == tenant_id
-        ).first()
-        
-        if not escalation:
-            raise HTTPException(status_code=404, detail="Escalation not found")
-        
-        user = db.query(User).filter(User.id == escalation.user_id).first()
-        
-        # Lấy lịch sử chat
-        messages = get_recent_messages(db, escalation.conversation_id, limit=100)
-        
-        messages_list = []
-        for msg in reversed(messages):
-            msg_dict = {
-                "id": msg.id if hasattr(msg, 'id') else None,
-                "role": msg.role,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                "is_staff_reply": getattr(msg, 'is_staff_reply', False)
-            }
-            if getattr(msg, 'is_staff_reply', False):
-                msg_dict["staff_name"] = getattr(msg, 'staff_name', None)
-            messages_list.append(msg_dict)
-        
-        return {
-            "escalation": {
-                "id": escalation.id,
-                "conversation_id": escalation.conversation_id,
-                "status": escalation.status,
-                "type": escalation.reason,
-                "reason": escalation.reason,
-                "created_at": escalation.created_at.isoformat() if escalation.created_at else None,
-                "assigned_to": escalation.assigned_to,
-                "note": escalation.note
-            },
-            "user": {
-                "id": user.id,
-                "name": user.full_name,
-                "email": user.email,
-                "phone": user.phone,
-                "address": user.address
-            } if user else None,
-            "messages": messages_list
-        }
-    finally:
-        db.close()
-
-
-@router.post("/staff/reply")
-def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_tenant_id)):
-    """
-    Nhân viên trả lời khách hàng trong một cuộc hội thoại (conversation)
-    
-    Request:
-    {
-        "conversation_id": 100,
-        "message": "Trả lời của nhân viên",
-        "staff_name": "Nguyễn Văn B"
-    }
-    
-    Response:
-    {
-        "success": true,
-        "message_id": 123,
-        "conversation_id": 100,
-        "staff_name": "Nguyễn Văn B"
-    }
-    """
-    from models.escalation import Escalation
-    from models.conversation import Conversation
-    
-    db = SessionLocal()
-    try:
-        print(f"📝 Processing staff reply for conversation #{req.conversation_id}")
-        print(f"   - Tenant ID: {tenant_id}")
-        print(f"   - Staff: {req.staff_name}")
-        print(f"   - Message: {req.message[:50]}..." if len(req.message) > 50 else f"   - Message: {req.message}")
-        
-        # Fetch conversation với tenant verification
-        conversation = db.query(Conversation).filter(
-            Conversation.id == req.conversation_id,
-            Conversation.tenant_id == tenant_id
-        ).first()
-        
-        if not conversation:
-            print(f" Conversation #{req.conversation_id} not found for tenant {tenant_id}")
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        
-        print(f" Conversation #{req.conversation_id} found")
-        print(f"   - User ID: {conversation.user_id}")
-        
-        # Lưu tin nhắn của nhân viên
-        try:
-            message = save_message(
-                db,
-                req.conversation_id,
-                "assistant",
-                req.message,
-                is_staff_reply=True,
-                staff_name=req.staff_name
-            )
-            print(f"Message #{message.id} saved to conversation #{req.conversation_id}")
-        except Exception as msg_err:
-            print(f" Error saving message: {msg_err}")
-            import traceback
-            traceback.print_exc()
-            raise
-        
-        # Cập nhật escalation nếu có active escalation
-        active_escalation = get_active_escalation(db, req.conversation_id)
-        if active_escalation:
-            active_escalation.status = "in_progress"
-            active_escalation.assigned_to = req.staff_name
-            active_escalation.note = req.message
-            
-            try:
-                db.commit()
-                db.refresh(active_escalation)
-                print(f" Escalation #{active_escalation.id} updated successfully")
-            except Exception as commit_err:
-                print(f" Error updating escalation: {commit_err}")
-                import traceback
-                traceback.print_exc()
-                raise
-        else:
-            db.commit()
-            print(f" No active escalation for conversation #{req.conversation_id}")
-        
-        return {
-            "success": True,
-            # "message_id": message.id if hasattr(message, 'id') else None,
-            # "conversation_id": req.conversation_id,
-            # "staff_name": req.staff_name
-             "message": {
-                "id": message.id,
-                "role": message.role,
-                "content": message.content,
-                "created_at": message.created_at.isoformat(),
-                "is_staff_reply": message.is_staff_reply,
-                "staff_name": message.staff_name
-                        }
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        print(f" Unexpected error in staff reply: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-    finally:
-        db.close()
-
-
-@router.put("/staff/escalation/{escalation_id}/resolve")
-def resolve_escalation(escalation_id: int, tenant_id: int = Depends(get_current_tenant_id), resolution_note: Optional[str] = Query(None)):
-    """
-    Đánh dấu escalation ticket là đã giải quyết
-    
-    Response:
-    {
-        "success": true,
-        "escalation": {
-            "id": 1,
-            "status": "resolved",
-            "resolved_at": "..."
-        }
-    }
-    """
-    from models.escalation import Escalation
-    from models.conversation import Conversation
-    
-    db = SessionLocal()
-    try:
-        escalation = db.query(Escalation).join(Conversation).filter(
-            Escalation.id == escalation_id,
-            Conversation.tenant_id == tenant_id
-        ).first()
-        
-        if not escalation:
-            raise HTTPException(status_code=404, detail="Escalation not found")
-        
-        escalation.status = "resolved"
-        if resolution_note:
-            escalation.note = resolution_note
-        
-        db.add(escalation)
-        db.commit()
-        
-        print(f" Escalation #{escalation_id} marked as resolved")
-        
-        return {
-            "success": True,
-            "escalation": {
-                "id": escalation.id,
-                "status": escalation.status,
-                "resolved_at": escalation.created_at.isoformat() if escalation.created_at else None
-            }
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-@router.put("/staff/escalation/{escalation_id}/assign")
-def assign_escalation(escalation_id: int, tenant_id: int = Depends(get_current_tenant_id), staff_name: str = Query(...)):
-    """
-    Gán escalation ticket cho nhân viên cụ thể
-    
-    Query params:
-        - staff_name: Tên nhân viên
-    
-    Response:
-    {
-        "success": true,
-        "escalation": {
-            "id": 1,
-            "assigned_to": "Nguyễn Văn B"
-        }
-    }
-    """
-    from models.escalation import Escalation
-    from models.conversation import Conversation
-    
-    db = SessionLocal()
-    try:
-        escalation = db.query(Escalation).join(Conversation).filter(
-            Escalation.id == escalation_id,
-            Conversation.tenant_id == tenant_id
-        ).first()
-        
-        if not escalation:
-            raise HTTPException(status_code=404, detail="Escalation not found")
-        
-        escalation.assigned_to = staff_name
-        escalation.status = "in_progress"
-        
-        db.add(escalation)
-        db.commit()
-        
-        print(f" Escalation #{escalation_id} assigned to {staff_name}")
-        
-        return {
-            "success": True,
-            "escalation": {
-                "id": escalation.id,
-                "assigned_to": escalation.assigned_to,
-                "status": escalation.status
-            }
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
-
-
-
-@router.post("/chat/conversation/{conversation_id}/disable-bot", tags=["chat"])
+@router.post("/chat/conversation/{conversation_id}/disable-bot", tags=["Chat"])
 def disable_bot_response(conversation_id: int, req: DisableBotRequest, tenant_id: int = Depends(get_current_tenant_id)):
     """
     Tắt/bật bot response cho một conversation cụ thể
