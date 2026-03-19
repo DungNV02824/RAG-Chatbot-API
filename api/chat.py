@@ -21,7 +21,7 @@ from service.order_flow import get_next_order_step, get_order_step_question
 from service.order_validator import is_answer_for_order_step
 from service.escalation_service import create_escalation, get_active_escalation
 
-from dto.chat_dto import ChatRequestDTO, StaffReplyRequestDTO
+from dto.chat_dto import ChatRequestDTO, StaffReplyRequestDTO, DisableBotRequest
 
 router = APIRouter()
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -247,7 +247,7 @@ Trả lời tự nhiên, như người thực, dựa HOÀN TOÀN trên thông ti
         db.close()
 
 
-@router.get("/chat/history/{anonymous_id}")
+@router.get("/chat/history/{anonymous_id}", tags=["chat"])
 def get_chat_history(anonymous_id: str, tenant_id: int = Depends(get_current_tenant_id), limit: int = Query(10, ge=1, le=100)):
     """
     Lấy lịch sử chat (recent messages) của user
@@ -291,7 +291,7 @@ def get_chat_history(anonymous_id: str, tenant_id: int = Depends(get_current_ten
         db.close()
 
 
-@router.get("/chat/conversation/{conversation_id}")
+@router.get("/chat/conversation/{conversation_id}", tags=["chat"])
 def get_conversation_messages(conversation_id: int, tenant_id: int = Depends(get_current_tenant_id), limit: int = Query(50, ge=1, le=100)):
     """
     Lấy lịch sử chat của một cuộc hội thoại (conversation)
@@ -716,11 +716,10 @@ def assign_escalation(escalation_id: int, tenant_id: int = Depends(get_current_t
         db.close()
 
 
-class DisableBotRequest(BaseModel):
-    is_disabled: bool = True
 
 
-@router.post("/chat/conversation/{conversation_id}/disable-bot")
+
+@router.post("/chat/conversation/{conversation_id}/disable-bot", tags=["chat"])
 def disable_bot_response(conversation_id: int, req: DisableBotRequest, tenant_id: int = Depends(get_current_tenant_id)):
     """
     Tắt/bật bot response cho một conversation cụ thể

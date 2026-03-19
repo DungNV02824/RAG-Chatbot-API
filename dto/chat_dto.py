@@ -13,3 +13,6 @@ class StaffReplyRequestDTO(BaseModel):
     conversation_id: int
     message: str
     staff_name: Optional[str] = None
+
+class DisableBotRequest(BaseModel):
+    is_disabled: bool = True

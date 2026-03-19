@@ -7,7 +7,7 @@ from db.session import SessionLocal
 from models.document import Document
 from service.embedding import embed_text
 from middleware.api_key import get_current_tenant_id
-
+from db.session import get_db
 router = APIRouter()
 
 
@@ -73,3 +73,35 @@ async def upload_excel(file: UploadFile = File(...), tenant_id: int = Depends(ge
 
     finally:
         db.close()
+
+@router.delete("/documents/clear")
+def clear_tenant_documents(
+    tenant_id: int = Depends(get_current_tenant_id), # Lấy ID từ Header x-api-key
+    db: Session = Depends(get_db)
+):
+    """
+    Xóa toàn bộ dữ liệu vector (RAG) của một Website (Tenant)
+    """
+    try:
+        # Lấy danh sách các dòng vector thuộc về tenant_id này
+        docs_to_delete = db.query(Document).filter(Document.tenant_id == tenant_id)
+        
+        # Đếm xem có bao nhiêu dòng chuẩn bị xóa
+        deleted_count = docs_to_delete.count()
+        
+        if deleted_count == 0:
+            return {"status": "success", "message": "Website này chưa có dữ liệu nào để xóa.", "deleted_rows": 0}
+
+        # Thực hiện lệnh Xóa toàn bộ
+        docs_to_delete.delete(synchronize_session=False)
+        db.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Đã xóa thành công {deleted_count} đoạn dữ liệu của Tenant ID {tenant_id}",
+            "deleted_rows": deleted_count
+        }
+
+    except Exception as e:
+        db.rollback() # Hoàn tác nếu có lỗi DB
+        raise HTTPException(status_code=500, detail=f"Lỗi khi xóa dữ liệu DB: {str(e)}")
