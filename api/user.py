@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from service.user_service import get_all_users, get_or_create_user_by_anonymous_id, update_user_profile_from_message
+from service.user_service import get_all_users, get_or_create_user_by_anonymous_id, update_user_profile_from_message, delete_user_with_cascading
 from db.session import SessionLocal
 from middleware.api_key import get_current_tenant_id
 from sqlalchemy import desc
@@ -84,5 +84,21 @@ def list_users(tenant_id: int = Depends(get_current_tenant_id)):
             })
         
         return formatted_users
+    finally:
+        db.close()
+
+
+@router.delete("/users/{user_id}", tags=["User"])
+def delete_user(user_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    """Xóa user và tất cả conversation, message liên quan"""
+    db = SessionLocal()
+    try:
+        result = delete_user_with_cascading(db, user_id, tenant_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        print(f"❌ Lỗi xóa user: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     finally:
         db.close()

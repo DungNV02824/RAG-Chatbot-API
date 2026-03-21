@@ -121,3 +121,61 @@ def get_all_users(db, tenant_id: int):
         db.close()
 
 
+def delete_user_with_cascading(db: Session, user_id: int, tenant_id: int):
+    """
+    Xóa user và tất cả Conversation, Message, Escalation liên quan
+    
+    Args:
+        db: Database session
+        user_id: ID của user cần xóa
+        tenant_id: ID của tenant (để verify ownership)
+    
+    Returns:
+        Message thành công hoặc raise exception
+    """
+    from models.conversation import Conversation
+    from models.message import Message
+    from models.escalation import Escalation
+    
+    # Lấy user và kiểm tra ownership
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.tenant_id == tenant_id
+    ).first()
+    
+    if not user:
+        raise ValueError(f"User {user_id} không tồn tại hoặc không thuộc tenant {tenant_id}")
+    
+    # Lấy tất cả conversations của user
+    conversations = db.query(Conversation).filter(
+        Conversation.user_id == user_id
+    ).all()
+    
+    # Xóa tất cả escalations liên quan đến conversations của user
+    for conversation in conversations:
+        db.query(Escalation).filter(
+            Escalation.conversation_id == conversation.id
+        ).delete()
+        print(f"  🗑️ Xóa tất cả escalations trong conversation {conversation.id}")
+    
+    # Xóa tất cả messages trong các conversations
+    for conversation in conversations:
+        db.query(Message).filter(
+            Message.conversation_id == conversation.id
+        ).delete()
+        print(f"  🗑️ Xóa tất cả messages trong conversation {conversation.id}")
+    
+    # Xóa tất cả conversations của user
+    db.query(Conversation).filter(
+        Conversation.user_id == user_id
+    ).delete()
+    print(f"  🗑️ Xóa tất cả conversations của user {user_id}")
+    
+    # Xóa user
+    db.delete(user)
+    db.commit()
+    print(f"  ✅ Xóa user {user_id} thành công!")
+    
+    return {"status": "success", "message": f"User {user_id} và tất cả dữ liệu liên quan đã bị xóa"}
+
+
