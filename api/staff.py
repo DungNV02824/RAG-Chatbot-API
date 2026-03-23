@@ -194,7 +194,7 @@ def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_
     
     db = SessionLocal()
     try:
-        print(f"📝 Processing staff reply for conversation #{req.conversation_id}")
+        print(f" Processing staff reply for conversation #{req.conversation_id}")
         print(f"   - Tenant ID: {tenant_id}")
         print(f"   - Staff: {req.staff_name}")
         print(f"   - Message: {req.message[:50]}..." if len(req.message) > 50 else f"   - Message: {req.message}")

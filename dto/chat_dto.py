@@ -15,4 +15,4 @@ class StaffReplyRequestDTO(BaseModel):
     staff_name: Optional[str] = None
 
 class DisableBotRequest(BaseModel):
-    is_disabled: bool = True
+    disable: bool = True

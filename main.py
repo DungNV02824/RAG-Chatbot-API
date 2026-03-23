@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from middleware.api_key import api_key_middleware
 from api.data_upload import router as ingest_router
 from api.chat import router as chat_router
@@ -8,12 +9,52 @@ from api.escalation import router as escalation_router
 from api.tenant import router as tenant_router
 from api.staff import router as staff_router
 
-app = FastAPI()
+
+# ========== STARTUP & SHUTDOWN EVENTS ==========
+async def init_services():
+    """Initialize background services on startup"""
+    try:
+        from core.queue import init_queue
+        await init_queue()
+        print("✓ Async task queue initialized")
+    except Exception as e:
+        print(f"⚠️ Failed to initialize task queue: {e}")
+    
+    try:
+        from core.cache import redis_client
+        redis_client.ping()
+        print("✓ Redis cache connected")
+    except Exception as e:
+        print(f"⚠️ Failed to connect to Redis: {e}")
+
+
+async def shutdown_services():
+    """Cleanup on shutdown"""
+    try:
+        from core.queue import close_queue
+        await close_queue()
+        print("✓ Async task queue closed")
+    except Exception as e:
+        print(f"⚠️ Error closing task queue: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage app lifecycle"""
+    # Startup
+    await init_services()
+    yield
+    # Shutdown
+    await shutdown_services()
+
+
+# ========== CREATE APP ==========
+app = FastAPI(lifespan=lifespan)
 
 # 1. CORS Middleware phải nằm trên cùng
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "x-api-key"], 
@@ -28,7 +69,7 @@ async def api_key_middleware_wrapper(request: Request, call_next):
         
     # NẾU LÀ API QUẢN TRỊ ADMIN (CRUD Tenants) HOẶC HEALTH CHECK -> BỎ QUA CHECK API KEY
     path = request.url.path
-    if path.startswith("/tenants") or path.startswith("/health"):
+    if path.startswith("/tenants") or path.startswith("/health") or path.startswith("/docs"):
         return await call_next(request)
         
     # Các API còn lại (Upload, Chat...) -> Bắt buộc kiểm tra API Key
@@ -44,4 +85,34 @@ app.include_router(staff_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Health check endpoint"""
+    return {
+        "status": "ok",
+        "services": {
+            "api": "running",
+            "redis": "check /stats for details",
+            "database": "check by making a request"
+        }
+    }
+
+
+@app.get("/stats")
+def get_stats():
+    """Get system stats"""
+    try:
+        from core.cache import redis_client
+        info = redis_client.info()
+        return {
+            "redis": {
+                "connected": True,
+                "memory_used": info.get("used_memory_human"),
+                "connected_clients": info.get("connected_clients")
+            }
+        }
+    except Exception as e:
+        return {
+            "redis": {
+                "connected": False,
+                "error": str(e)
+            }
+        }

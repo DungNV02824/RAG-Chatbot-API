@@ -20,3 +20,13 @@ pgvector
 
 openpyxl
 pandas
+
+# Redis & Caching
+redis
+arq
+
+# Semantic similarity
+sentence-transformers
+
+# Async utilities
+aiofiles

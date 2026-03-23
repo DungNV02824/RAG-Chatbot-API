@@ -98,7 +98,7 @@ def delete_user(user_id: int, tenant_id: int = Depends(get_current_tenant_id)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        print(f"❌ Lỗi xóa user: {e}")
+        print(f" Lỗi xóa user: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         db.close()
