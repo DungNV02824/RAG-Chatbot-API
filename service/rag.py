@@ -1,5 +1,6 @@
 from sqlalchemy import text
 from db.session import SessionLocal
+from db.session import set_tenant_context
 from service.embedding import embed_text
 
 
@@ -7,6 +8,9 @@ def retrieve_context(question: str, tenant_id: int, k: int = 5):
     db = SessionLocal()
 
     try:
+        # Ensure PostgreSQL RLS policies evaluate against the right tenant.
+        set_tenant_context(db, tenant_id)
+
         embedding = embed_text(question)
 
         sql = text("""

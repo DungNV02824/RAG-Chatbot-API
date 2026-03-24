@@ -28,3 +28,8 @@ RATE_LIMIT_BURST = int(os.getenv("RATE_LIMIT_BURST", 10))  # burst size
 SLIDING_WINDOW_SIZE = int(os.getenv("SLIDING_WINDOW_SIZE", 10))  # last N messages
 SUMMARIZATION_THRESHOLD = int(os.getenv("SUMMARIZATION_THRESHOLD", 50))  # messages count
 SUMMARY_MAX_TOKENS = int(os.getenv("SUMMARY_MAX_TOKENS", 500))
+
+# LLM Billing / Hard Limit
+HARD_LIMIT_USD_PER_MONTH = float(os.getenv("HARD_LIMIT_USD_PER_MONTH", 5.0))
+INPUT_TOKEN_PRICE_PER_1K = float(os.getenv("INPUT_TOKEN_PRICE_PER_1K", 0.0025))
+OUTPUT_TOKEN_PRICE_PER_1K = float(os.getenv("OUTPUT_TOKEN_PRICE_PER_1K", 0.01))

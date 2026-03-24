@@ -28,7 +28,13 @@ async def upload_excel(
         if col not in df.columns:
             raise HTTPException(status_code=400, detail=f"Thiếu cột: {col}")
 
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db: Session = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     pool = await init_queue()  
 
     try:
@@ -155,6 +161,12 @@ def clear_tenant_documents(
     """
     Xóa toàn bộ dữ liệu vector (RAG) của một Website (Tenant)
     """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         # Lấy danh sách các dòng vector thuộc về tenant_id này
         docs_to_delete = db.query(Document).filter(Document.tenant_id == tenant_id)

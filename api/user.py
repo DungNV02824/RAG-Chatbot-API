@@ -13,7 +13,13 @@ router = APIRouter()
 @router.post("/users/{anonymous_id}/update-info",tags=["User"])
 def update_user_info(anonymous_id: str, user_data: UserInfoUpdate, tenant_id: int = Depends(get_current_tenant_id)):
     """Lưu thông tin người dùng trực tiếp"""
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         user = get_or_create_user_by_anonymous_id(db, anonymous_id, tenant_id)
         
@@ -41,7 +47,13 @@ def update_user_info(anonymous_id: str, user_data: UserInfoUpdate, tenant_id: in
 
 @router.get("/users", tags=["User"])
 def list_users(tenant_id: int = Depends(get_current_tenant_id)):
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         users = get_all_users(db, tenant_id)
         
@@ -91,7 +103,13 @@ def list_users(tenant_id: int = Depends(get_current_tenant_id)):
 @router.delete("/users/{user_id}", tags=["User"])
 def delete_user(user_id: int, tenant_id: int = Depends(get_current_tenant_id)):
     """Xóa user và tất cả conversation, message liên quan"""
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         result = delete_user_with_cascading(db, user_id, tenant_id)
         return result

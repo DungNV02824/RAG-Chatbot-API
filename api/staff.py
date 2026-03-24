@@ -45,8 +45,14 @@ def get_escalations_list(tenant_id: int = Depends(get_current_tenant_id), status
             }
         ]
     }
-    """    
+    """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         query = db.query(Escalation).join(Conversation).filter(
             Conversation.tenant_id == tenant_id
@@ -115,9 +121,13 @@ def get_escalation_detail(escalation_id: int, tenant_id: int = Depends(get_curre
         ]
     }
     """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
 
-    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         # Join với conversation để verify tenant
         escalation = db.query(Escalation).join(Conversation).filter(
@@ -190,9 +200,13 @@ def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_
         "staff_name": "Nguyễn Văn B"
     }
     """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
 
-    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         print(f" Processing staff reply for conversation #{req.conversation_id}")
         print(f"   - Tenant ID: {tenant_id}")
@@ -290,10 +304,15 @@ def resolve_escalation(escalation_id: int, tenant_id: int = Depends(get_current_
         }
     }
     """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
     from models.escalation import Escalation
     from models.conversation import Conversation
     
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         escalation = db.query(Escalation).join(Conversation).filter(
             Escalation.id == escalation_id,
@@ -344,7 +363,13 @@ def assign_escalation(escalation_id: int, tenant_id: int = Depends(get_current_t
         }
     }
     """
+    # 🔐 Import RLS helper
+    from db.session import set_tenant_context
+    
     db = SessionLocal()
+    # 🔐 SET RLS CONTEXT
+    set_tenant_context(db, tenant_id)
+    
     try:
         escalation = db.query(Escalation).join(Conversation).filter(
             Escalation.id == escalation_id,

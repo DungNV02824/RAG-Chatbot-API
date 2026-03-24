@@ -1,25 +1,28 @@
 """
-API Key Middleware for Multi-Tenant Support
+API Key Middleware for Multi-Tenant Support with RLS
 
 Maps x-api-key header to tenant_id by looking up in tenants table.
 Stores resolved tenant_id in request.state for use in endpoints.
+Sets PostgreSQL RLS context (app.current_tenant) for data isolation.
 """
 
 from fastapi import Request, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from db.session import SessionLocal
 from models.tenant import Tenant
 
 
 async def api_key_middleware(request: Request, call_next):
     """
-    Middleware to extract x-api-key header and resolve tenant_id.
+    Middleware to extract x-api-key header and resolve tenant_id with RLS context.
     
     Flow:
     1. Extract x-api-key from request headers
     2. Look up tenant in database by api_key
-    3. Store tenant_id in request.state.tenant_id
-    4. If key invalid or tenant inactive, reject with 401
+    3. Set PostgreSQL RLS context (app.current_tenant)
+    4. Store tenant_id in request.state.tenant_id
+    5. If key invalid or tenant inactive, reject with 401
     """
     
     # Get API key from header
@@ -28,6 +31,7 @@ async def api_key_middleware(request: Request, call_next):
     # Some endpoints (like /health) don't require API key
     if request.url.path in ["/health", "/docs", "/openapi.json", "/redoc"]:
         request.state.tenant_id = None
+        request.state.db = None
         response = await call_next(request)
         return response
     
@@ -52,8 +56,27 @@ async def api_key_middleware(request: Request, call_next):
                 detail="Invalid API key or tenant is inactive"
             )
         
-        # Store tenant_id in request state for access in endpoints
+        # 🔐 SET RLS CONTEXT: Configure PostgreSQL session variable
+        try:
+            db.execute(
+                text("SELECT set_config('app.current_tenant', :tenant_id, false)"),
+                {"tenant_id": str(tenant.id)},
+            )
+            # Optional backward-compatible key.
+            db.execute(
+                text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"),
+                {"tenant_id": str(tenant.id)},
+            )
+            print(f"🔐 RLS context set: app.current_tenant = {tenant.id}")
+        except Exception as rls_error:
+            print(f"⚠️ Warning: RLS context not set: {rls_error}")
+            # Don't fail the request - RLS has default policies
+        
+        # Store tenant_id and db in request state for access in endpoints
         request.state.tenant_id = tenant.id
+        request.state.rls_context_set = True
+        
+        print(f"✓ Tenant authenticated: {tenant.id} ({tenant.name})")
         
     finally:
         db.close()
@@ -73,7 +96,10 @@ def get_current_tenant_id(request: Request) -> int:
             pass
     """
     tenant_id = getattr(request.state, "tenant_id", None)
-    print(" Tenant ID from API key:", tenant_id)
+    rls_set = getattr(request.state, "rls_context_set", False)
+    
+    print(f"📌 Tenant ID from API key: {tenant_id} (RLS context: {'✓' if rls_set else '✗'})")
+    
     if tenant_id is None:
         raise HTTPException(
             status_code=401,

@@ -109,16 +109,18 @@ def get_or_create_user_by_anonymous_id(db, anonymous_id: str, tenant_id: int):
 
 
 def get_all_users(db, tenant_id: int):
-    db = SessionLocal()
-    try:
-        users = db.query(User)\
-            .filter(User.tenant_id == tenant_id)\
-            .order_by(User.id.asc())\
-            .all()
+    """
+    List users for a tenant.
 
-        return users
-    finally:
-        db.close()
+    Note: Must use the provided SQLAlchemy session so the caller can set
+    PostgreSQL RLS context on the same connection.
+    """
+    users = db.query(User)\
+        .filter(User.tenant_id == tenant_id)\
+        .order_by(User.id.asc())\
+        .all()
+
+    return users
 
 
 def delete_user_with_cascading(db: Session, user_id: int, tenant_id: int):
