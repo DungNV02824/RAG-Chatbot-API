@@ -19,32 +19,10 @@ def log_llm_usage(
     db = SessionLocal()
     try:
         set_tenant_context(db, tenant_id)
-
-        db.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS llm_usage_logs (
-                    id SERIAL PRIMARY KEY,
-                    tenant_id INTEGER NOT NULL,
-                    conversation_id INTEGER NULL,
-                    model_name VARCHAR(120) NOT NULL,
-                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                    completion_tokens INTEGER NOT NULL DEFAULT 0,
-                    total_tokens INTEGER NOT NULL DEFAULT 0,
-                    estimated_cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-        )
-        db.execute(
-            text(
-                """
-                ALTER TABLE llm_usage_logs
-                ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0
-                """
-            )
-        )
+        # Note: Do NOT create/alter table here.
+        # The DB role used by the app often has limited privileges (e.g. no CREATE on `public`)
+        # because RLS policies restrict operations. Table `llm_usage_logs` should be created
+        # via migration/admin (e.g. pgAdmin) with the right privileges.
 
         estimated_cost_usd = (
             (prompt_tokens / 1000.0) * INPUT_TOKEN_PRICE_PER_1K
@@ -124,34 +102,6 @@ def enforce_monthly_hard_limit(tenant_id: int, hard_limit_usd: float = HARD_LIMI
     db = SessionLocal()
     try:
         set_tenant_context(db, tenant_id)
-
-        # Ensure table exists before reading aggregate.
-        db.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS llm_usage_logs (
-                    id SERIAL PRIMARY KEY,
-                    tenant_id INTEGER NOT NULL,
-                    conversation_id INTEGER NULL,
-                    model_name VARCHAR(120) NOT NULL,
-                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                    completion_tokens INTEGER NOT NULL DEFAULT 0,
-                    total_tokens INTEGER NOT NULL DEFAULT 0,
-                    estimated_cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0,
-                    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-                )
-                """
-            )
-        )
-        db.execute(
-            text(
-                """
-                ALTER TABLE llm_usage_logs
-                ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(12, 6) NOT NULL DEFAULT 0
-                """
-            )
-        )
-        db.commit()
 
         spend_row = db.execute(
             text(

@@ -103,7 +103,9 @@ def get_or_create_user_by_anonymous_id(db, anonymous_id: str, tenant_id: int):
         tenant_id=tenant_id  
     )
     db.add(user)
+    print("BEFORE COMMIT:", user.id)
     db.commit()
+    print("AFTER COMMIT:", user.id)
     db.refresh(user)
     return user
 

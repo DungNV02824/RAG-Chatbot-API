@@ -4,11 +4,12 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from openai import OpenAI
+from sqlalchemy import text
+from uuid_utils import uuid4
 
 from core.config import OPENAI_API_KEY, CHAT_MODEL
 from core.cache import get_cached_response, set_cached_response
 from core.rate_limiter import check_rate_limit
-from core.queue import enqueue_task, embed_document_task
 from db.session import SessionLocal
 from service.rag import retrieve_context
 from service.intent_service import is_order_intent, is_escalate_intent
@@ -152,7 +153,9 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
     try:
         # 🔐 SET RLS CONTEXT: Ensure all queries respect tenant isolation
         set_tenant_context(db, tenant_id)
-        
+        # 🔥 ADD DEBUG
+        print("👉 Setting tenant_id:", tenant_id)
+        print(db.execute(text("SHOW app.current_tenant")).fetchone())
         # ========== RATE LIMITING ==========
         is_allowed, info = check_rate_limit(
             identifier=f"{tenant_id}:{req.anonymous_id}",
@@ -190,7 +193,12 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             print(f"✓ Cache HIT: {similarity:.2%} similar | Latency: <100ms | Cost: $0")
             
             # Still save user message to conversation
-            user = get_or_create_user_by_anonymous_id(db, req.anonymous_id, tenant_id)
+            # user = get_or_create_user_by_anonymous_id(db, req.anonymous_id, tenant_id)
+            # conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
+            # đảm bảo anonymous_id không rỗng
+            anonymous_id = req.anonymous_id or str(uuid4())
+
+            user = get_or_create_user_by_anonymous_id(db, anonymous_id, tenant_id)
             conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
             
             if conversation:
@@ -210,6 +218,9 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
 
         if conversation:
             save_message(db, conversation.id, "user", req.message)
+            # `save_message()` có `db.commit()` nên SQLAlchemy có thể release connection
+            # về pool; do đó cần set lại RLS context để tránh `current_setting(...)` rỗng.
+            set_tenant_context(db, tenant_id)
 
         # ========== UPDATE USER PROFILE ==========
         if user and (req.name or req.email or req.address or req.phone):
@@ -226,6 +237,8 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 }
             )
             
+            # `update_user_profile_from_message()` cũng commit; set lại RLS trước khi refresh.
+            set_tenant_context(db, tenant_id)
             db.refresh(user)
             print(f"✓ User {user.id} updated: {user.full_name}")
 

@@ -7,35 +7,30 @@ SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
     bind=engine
+    
 )
 
 def set_tenant_context(db_session, tenant_id: int):
-    """
-    Set PostgreSQL session variable for RLS (Row Level Security).
-    
-    This should be called immediately after getting a database session
-    to enable RLS policies that check app.current_tenant.
-    
-    Args:
-        db_session: SQLAlchemy session object
-        tenant_id: The tenant ID to set in PostgreSQL session context
-    """
     try:
-        # Execute SQL to set session variable for RLS.
-        # Keep both keys for backward compatibility with older DB scripts.
+        if tenant_id is None:
+            raise ValueError("tenant_id cannot be None")
+
+        tenant_id_int = int(tenant_id)  # ép kiểu chắc chắn
+
         db_session.execute(
             text("SELECT set_config('app.current_tenant', :tenant_id, false)"),
-            {"tenant_id": str(tenant_id)},
+            {"tenant_id": str(tenant_id_int)},
         )
         db_session.execute(
             text("SELECT set_config('app.current_tenant_id', :tenant_id, false)"),
-            {"tenant_id": str(tenant_id)},
+            {"tenant_id": str(tenant_id_int)},
         )
-        print(f"✓ PostgreSQL RLS context set: app.current_tenant = {tenant_id}")
+
+        print(f"✓ PostgreSQL RLS context set: app.current_tenant = {tenant_id_int}")
+
     except Exception as e:
         print(f"⚠️ Failed to set RLS context: {e}")
-        # Don't raise - allow request to continue
-        # RLS will fall back to default permissions if context not set
+        raise  # ❗ QUAN TRỌNG: phải raise để tránh chạy sai tenant
 
 def get_db():
     """

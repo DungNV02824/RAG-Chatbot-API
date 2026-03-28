@@ -32,6 +32,9 @@ def update_user_info(anonymous_id: str, user_data: UserInfoUpdate, tenant_id: in
         
         print(f" Lưu thông tin user {user.id}: {update_dict}")
         update_user_profile_from_message(db, user, update_dict)
+        # update_user_profile_from_message() commits and may cause SQLAlchemy to
+        # reuse a different pooled connection, so re-apply RLS before refresh.
+        set_tenant_context(db, tenant_id)
         db.refresh(user)
         
         return {
