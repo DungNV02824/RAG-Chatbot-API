@@ -123,15 +123,12 @@ async def stream_response(
         yield f"event: done\ndata: {json.dumps({'full_response': restored_full_response})}\n\n"
 
     except asyncio.CancelledError:
-        yield f"event: error\ndata: {json.dumps({'error': 'cancelled'})}\n\n"
-        
-    except asyncio.CancelledError:
-        # Client disconnected, gracefully stop streaming
         print("⚠️ Streaming cancelled by client")
-        yield f"data: {json.dumps({'error': 'Stream cancelled'})}\n\n"
+        raise 
+
     except Exception as e:
         print(f"❌ Streaming error: {e}")
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
 
 @router.post("/chat", tags=["Chat"])
