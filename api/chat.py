@@ -47,10 +47,17 @@ async def stream_response(
     conversation_id: Optional[int] = None,
     pii_mapping: Optional[Dict[str, str]] = None,
 ):
+    # Lưu assistant message trong backend để staff dashboard có thể poll,
+    # thay vì phụ thuộc FE gọi thêm /chat/save-response.
+    db = SessionLocal()
+    from db.session import set_tenant_context
+    set_tenant_context(db, tenant_id)
+
     full_response = ""
     usage_prompt_tokens = 0
     usage_completion_tokens = 0
     usage_total_tokens = 0
+    restored_full_response = ""
 
     try:
         stream = client.chat.completions.create(
@@ -120,6 +127,10 @@ async def stream_response(
                 completion_tokens=usage_completion_tokens,
                 total_tokens=usage_total_tokens,
             )
+
+        # Persist chatbot response for conversation history
+        if conversation_id is not None:
+            save_message(db, conversation_id, "assistant", restored_full_response)
         yield f"event: done\ndata: {json.dumps({'full_response': restored_full_response})}\n\n"
 
     except asyncio.CancelledError:
@@ -129,6 +140,8 @@ async def stream_response(
     except Exception as e:
         print(f"❌ Streaming error: {e}")
         yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+    finally:
+        db.close()
 
 
 @router.post("/chat", tags=["Chat"])
@@ -187,27 +200,34 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         cached_result = await get_cached_response(tenant_id, req.message)
         if cached_result:
             answer, similarity = cached_result
-            print(f"✓ Cache HIT: {similarity:.2%} similar | Latency: <100ms | Cost: $0")
-            
-            # Still save user message to conversation
-            # user = get_or_create_user_by_anonymous_id(db, req.anonymous_id, tenant_id)
-            # conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
-            # đảm bảo anonymous_id không rỗng
-            anonymous_id = req.anonymous_id or str(uuid4())
 
-            user = get_or_create_user_by_anonymous_id(db, anonymous_id, tenant_id)
-            conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
-            
-            if conversation:
-                save_message(db, conversation.id, "user", req.message)
-                save_message(db, conversation.id, "assistant", answer)
-            
-            return {
-                "answer": answer,
-                "type": "text",
-                "cached": True,
-                "similarity": similarity
-            }
+            # Nếu câu trả lời trong cache chính là câu "đợi nhân viên",
+            # bỏ qua cache để bot được chạy lại bình thường khi đã bật bot.
+            waiting_msg = (
+                "Nhân viên support sẽ sớm phản hồi lại anh/chị ạ. Vui lòng chờ xíu nhé!"
+            )
+            if (answer or "").strip() == waiting_msg:
+                print("⚠️ Cache HIT contains waiting_msg, ignore cache and continue.")
+            else:
+                print(f"✓ Cache HIT: {similarity:.2%} similar | Latency: <100ms | Cost: $0")
+                
+                # đảm bảo anonymous_id không rỗng
+                anonymous_id = req.anonymous_id or str(uuid4())
+
+                user = get_or_create_user_by_anonymous_id(db, anonymous_id, tenant_id)
+                conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
+                
+                if conversation:
+                    save_message(db, conversation.id, "user", req.message)
+                    save_message(db, conversation.id, "assistant", answer)
+                
+                return {
+                    "answer": answer,
+                    "type": "text",
+                    "cached": True,
+                    "similarity": similarity,
+                    "conversation_id": conversation.id if conversation else None,
+                }
         
         # ========== USER & CONVERSATION ==========
         user = get_or_create_user_by_anonymous_id(db, req.anonymous_id, tenant_id)
@@ -258,10 +278,13 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             
             save_message(db, conversation.id, "assistant", escalate_msg)
             
-            return {
-                "answer": escalate_msg,
-                "type": "escalated"
-            }
+            async def fake_stream():
+                # Trả về đúng nguyên văn (giữ newline) để FE tích fullText
+                # khớp với content đã lưu DB, hạn chế lưu trùng.
+                yield f"data: {json.dumps({'token': escalate_msg})}\n\n"
+                yield f"data: {json.dumps({'done': True})}\n\n"
+
+            return StreamingResponse(fake_stream(), media_type="text/event-stream")
         
         # ========== CHECK ORDER INTENT ==========
         if user and conversation and is_order_intent(req.message):
@@ -279,9 +302,12 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         # ========== CHECK BOT DISABLED ==========
         if conversation and conversation.disable_bot_response:
             print(f" Bot response disabled for conversation #{conversation.id}")
+            waiting_msg = "Nhân viên support sẽ sớm phản hồi lại anh/chị ạ. Vui lòng chờ xíu nhé!"
+            save_message(db, conversation.id, "assistant", waiting_msg)
             return {
-                "answer": "Nhân viên support sẽ sớm phản hồi lại anh/chị ạ. Vui lòng chờ xíu nhé!",
-                "type": "waiting_for_staff"
+                "answer": waiting_msg,
+                "type": "waiting_for_staff",
+                "conversation_id": conversation.id
             }
 
         # ========== SLIDING WINDOW CONTEXT ==========
@@ -317,10 +343,14 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         context, images = retrieve_context(req.message, tenant_id)
         
         if images:
+            answer_msg = "Dưới đây là hình ảnh sản phẩm anh/chị yêu cầu ạ."
+            if conversation:
+                save_message(db, conversation.id, "assistant", answer_msg)
             return {
-                "answer": "Dưới đây là hình ảnh sản phẩm anh/chị yêu cầu ạ.",
+                "answer": answer_msg,
                 "images": images,
-                "type": "image"
+                "type": "image",
+                "conversation_id": conversation.id if conversation else None
             }
  
         # ========== NO CONTEXT FOUND - CREATE ESCALATION ==========
@@ -466,6 +496,7 @@ async def save_chat_response(
     
     try:
         from models.conversation import Conversation
+        from models.message import Message
         
         conversation = db.query(Conversation).filter(
             Conversation.id == conversation_id,
@@ -475,12 +506,46 @@ async def save_chat_response(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
         
-        # Get the original user question from last message
-        messages = get_recent_messages(db, conversation_id, limit=1)
-        question = ""
-        if messages and messages[-1].role == "user":
-            question = messages[-1].content
-        
+        answer = answer or ""
+        normalized_answer = answer.strip()
+
+        # Lấy user message gần nhất để làm semantic-cache key.
+        last_user_msg = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation_id,
+                Message.role == "user",
+            )
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+        question = last_user_msg.content if last_user_msg else ""
+
+        # Idempotency: tránh ghi trùng assistant message giống hệt
+        # (ví dụ: streaming đã persist server-side trước đó).
+        last_assistant_msg = (
+            db.query(Message)
+            .filter(
+                Message.conversation_id == conversation_id,
+                Message.role == "assistant",
+                Message.is_staff_reply == False,
+            )
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+
+        if (
+            last_assistant_msg
+            and last_assistant_msg.staff_name is None
+            and (last_assistant_msg.content or "").strip() == normalized_answer
+        ):
+            if question:
+                await set_cached_response(str(tenant_id), question, answer)
+            return {
+                "success": True,
+                "message": "Response already saved (idempotent)"
+            }
+
         # Save response
         save_message(db, conversation_id, "assistant", answer)
         
@@ -604,7 +669,7 @@ async def get_chat_stats(
     from db.session import set_tenant_context
     
     db = SessionLocal()
-    # 🔐 SET RLS CONTEXT
+
     set_tenant_context(db, tenant_id)
     try:
         from models.conversation import Conversation
@@ -639,7 +704,7 @@ async def get_chat_stats(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()
-
+        
 
 @router.post("/chat/disable-bot/{conversation_id}", tags=["Chat"])
 async def disable_bot_response(
@@ -647,32 +712,87 @@ async def disable_bot_response(
     req: DisableBotRequest,
     tenant_id: int = Depends(get_current_tenant_id)
 ):
-    """Disable bot responses for a conversation (when escalated to staff)"""
-    # 🔐 Import RLS helper
     from db.session import set_tenant_context
-    
+    from models.conversation import Conversation
+
     db = SessionLocal()
-    # 🔐 SET RLS CONTEXT
     set_tenant_context(db, tenant_id)
+
     try:
-        from models.conversation import Conversation
-        
+        # ✅ Validate input
+        if req.disable is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Field 'disable' is required (true/false)"
+            )
+
+        # ✅ Tìm conversation
         conversation = db.query(Conversation).filter(
             Conversation.id == conversation_id,
             Conversation.tenant_id == tenant_id
         ).first()
-        
+
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        
+
+        # 🔥 DEBUG (rất quan trọng)
+        print(f"👉 Before: {conversation.disable_bot_response}")
+        print(f"👉 Incoming req.disable: {req.disable}")
+
+        # ✅ Update
         conversation.disable_bot_response = req.disable
         db.commit()
-        
+        db.refresh(conversation)
+
+        print(f"👉 After: {conversation.disable_bot_response}")
+
         return {
             "success": True,
             "conversation_id": conversation_id,
-            "bot_disabled": req.disable
+            "bot_disabled": conversation.disable_bot_response
         }
-        
+
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error disable bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
     finally:
         db.close()
+
+
+# @router.post("/chat/disable-bot/{conversation_id}", tags=["Chat"])
+# async def disable_bot_response(
+#     conversation_id: int,
+#     req: DisableBotRequest,
+#     tenant_id: int = Depends(get_current_tenant_id)
+# ):
+#     """Disable bot responses for a conversation (when escalated to staff)"""
+#     # 🔐 Import RLS helper
+#     from db.session import set_tenant_context
+    
+#     db = SessionLocal()
+#     # 🔐 SET RLS CONTEXT
+#     set_tenant_context(db, tenant_id)
+#     try:
+#         from models.conversation import Conversation
+        
+#         conversation = db.query(Conversation).filter(
+#             Conversation.id == conversation_id,
+#             Conversation.tenant_id == tenant_id
+#         ).first()
+        
+#         if not conversation:
+#             raise HTTPException(status_code=404, detail="Conversation not found")
+        
+#         conversation.disable_bot_response = req.disable
+#         db.commit()
+        
+#         return {
+#             "success": True,
+#             "conversation_id": conversation_id,
+#             "bot_disabled": req.disable
+#         }
+        
+#     finally:
+#         db.close()

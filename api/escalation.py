@@ -12,6 +12,7 @@ from service.escalation_service import (
     get_escalations_by_user
 )
 from service.message_service import save_message
+from core.realtime_staff import broadcast_staff_message
 
 router = APIRouter()
 
@@ -78,8 +79,8 @@ def get_user_escalations(user_id: int):
     finally:
         db.close()
 
-@router.post("/escalations/{escalation_id}/reply",tags=["Escalation"])
-def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
+@router.post("/escalations/{escalation_id}/reply", tags=["Escalation"])
+async def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
     """
     Staff trả lời khách
     Nhân viên gửi phản hồi trực tiếp cho khách hàng
@@ -121,7 +122,7 @@ def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
             escalation.assigned_to = req.assigned_to
         escalation.status = "in_progress"
         escalation.note = req.message
-        
+
         try:
             db.commit()
             db.refresh(escalation)
@@ -131,6 +132,22 @@ def staff_reply_to_customer(escalation_id: int, req: StaffReplyRequest):
             import traceback
             traceback.print_exc()
             raise
+
+        # Broadcast realtime cho phía user (giống /staff/reply)
+        try:
+            payload = {
+                "id": message.id,
+                "role": message.role,
+                "content": message.content,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "is_staff_reply": message.is_staff_reply,
+                "staff_name": message.staff_name,
+                "conversation_id": escalation.conversation_id,
+            }
+            await broadcast_staff_message(escalation.conversation_id, payload)
+        except Exception as br_err:
+            # Không fail API nếu broadcast lỗi; chỉ log
+            print(f"⚠️ Error broadcasting staff reply WS: {br_err}")
         
         return {
             "success": True,

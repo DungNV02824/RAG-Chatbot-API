@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from typing import Optional
 from db.session import SessionLocal
 from dto.chat_dto import  StaffReplyRequestDTO
@@ -11,9 +11,33 @@ from service.message_service import (
 from models.escalation import Escalation
 from models.user import User
 from models.conversation import Conversation
+from core.realtime_staff import conversation_connections, broadcast_staff_message
 
 
 router = APIRouter()
+
+
+@router.websocket("/ws/staff-messages/{conversation_id}")
+async def staff_messages_ws(websocket: WebSocket, conversation_id: int):
+    """
+    WebSocket cho phía user subscribe tin nhắn của nhân viên theo conversation_id.
+    """
+    await websocket.accept()
+    cid = int(conversation_id)
+    conversation_connections.setdefault(cid, []).append(websocket)
+
+    try:
+        # Giữ kết nối mở; client có thể gửi ping, nhưng ta chỉ cần chờ receive.
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        conns = conversation_connections.get(cid, [])
+        if websocket in conns:
+            conns.remove(websocket)
+        if not conns:
+            conversation_connections.pop(cid, None)
 
 @router.get("/staff/escalations", tags=["Staff Support"])
 def get_escalations_list(tenant_id: int = Depends(get_current_tenant_id), status: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=100)):
@@ -181,7 +205,7 @@ def get_escalation_detail(escalation_id: int, tenant_id: int = Depends(get_curre
 
 
 @router.post("/staff/reply", tags=["Staff Support"])
-def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_tenant_id)):
+async def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_tenant_id)):
     """
     Nhân viên trả lời khách hàng trong một cuộc hội thoại (conversation)
     
@@ -263,19 +287,22 @@ def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_current_
             db.commit()
             print(f" No active escalation for conversation #{req.conversation_id}")
         
+        payload = {
+            "id": message.id,
+            "role": message.role,
+            "content": message.content,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+            "is_staff_reply": message.is_staff_reply,
+            "staff_name": message.staff_name,
+            "conversation_id": req.conversation_id,
+        }
+
+        # Phát realtime tới phía user nếu có WebSocket đang mở
+        await broadcast_staff_message(req.conversation_id, payload)
+
         return {
             "success": True,
-            # "message_id": message.id if hasattr(message, 'id') else None,
-            # "conversation_id": req.conversation_id,
-            # "staff_name": req.staff_name
-             "message": {
-                "id": message.id,
-                "role": message.role,
-                "content": message.content,
-                "created_at": message.created_at.isoformat(),
-                "is_staff_reply": message.is_staff_reply,
-                "staff_name": message.staff_name
-                        }
+            "message": payload,
         }
     except HTTPException:
         raise
