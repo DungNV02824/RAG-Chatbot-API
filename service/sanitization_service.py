@@ -85,6 +85,17 @@ def sanitize_text_for_llm_with_mapping(
     return sanitized, report, mapping, next_index
 
 
+def redact_pii_for_log(value: Optional[str]) -> str:
+    """
+    One-way mask of common PII for stdout/logging (GDPR-friendly).
+    Uses the same patterns as LLM sanitization but without reversible placeholders.
+    """
+    if value is None or value == "":
+        return ""
+    redacted, _ = sanitize_text_for_llm(str(value))
+    return redacted
+
+
 def restore_text_from_mapping(text: str, mapping: Optional[Dict[str, str]]) -> str:
     """Restore reversible placeholders back to original text."""
     if not text or not mapping:

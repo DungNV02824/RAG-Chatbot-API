@@ -18,6 +18,7 @@ from service.guardrail_service import scan_prompt_injection, sanitize_untrusted_
 from service.sanitization_service import (
     sanitize_text_for_llm_with_mapping,
     restore_text_from_mapping,
+    redact_pii_for_log,
 )
 from service.usage_service import log_llm_usage, enforce_monthly_hard_limit
 from middleware.api_key import get_current_tenant_id
@@ -241,7 +242,13 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
 
         # ========== UPDATE USER PROFILE ==========
         if user and (req.name or req.email or req.address or req.phone):
-            print(f"👤 Updating user {user.id}: name={req.name}, email={req.email}")
+            print(
+                f"👤 Updating user id={user.id} "
+                f"(name={redact_pii_for_log(req.name) or '—'}, "
+                f"email={'set' if req.email else '—'}, "
+                f"phone={'set' if req.phone else '—'}, "
+                f"address={'set' if req.address else '—'})"
+            )
             
             update_user_profile_from_message(
                 db, 
@@ -257,7 +264,7 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             # `update_user_profile_from_message()` cũng commit; set lại RLS trước khi refresh.
             set_tenant_context(db, tenant_id)
             db.refresh(user)
-            print(f"✓ User {user.id} updated: {user.full_name}")
+            print(f"✓ User {user.id} updated (display_name redacted={redact_pii_for_log(user.full_name)})")
 
         # ========== CHECK ESCALATION INTENT ==========
         if user and conversation and is_escalate_intent(req.message):
@@ -434,7 +441,11 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         )
         
         # ========== STREAM RESPONSE ==========
-        print(f" Streaming response for question: {req.message[:50]}...")
+        print(
+            f" Streaming response (tenant={tenant_id}, "
+            f"conversation_id={conversation.id if conversation else None}, "
+            f"sanitized_preview={redact_pii_for_log((req.message or '')[:80])!r})"
+        )
         
         try:
             response = StreamingResponse(
@@ -540,7 +551,7 @@ async def save_chat_response(
             and (last_assistant_msg.content or "").strip() == normalized_answer
         ):
             if question:
-                await set_cached_response(str(tenant_id), question, answer)
+                await set_cached_response(int(tenant_id), question, answer)
             return {
                 "success": True,
                 "message": "Response already saved (idempotent)"
@@ -551,7 +562,7 @@ async def save_chat_response(
         
         # Cache the response for semantic similarity matching
         if question:
-            await set_cached_response(str(tenant_id), question, answer)
+            await set_cached_response(int(tenant_id), question, answer)
         
         return {
             "success": True,

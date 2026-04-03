@@ -134,11 +134,13 @@ async def process_ocr_job(ctx, file_path: str, document_id: int, tenant_id: int)
 
 
 async def generate_embedding_batch_job(ctx, documents: list):
-    """Batch job: Retry từng phần (hoặc retry cả batch) + Database Locking"""
+    """Batch: một transaction / row lock + embed (giống embed_document_job). Retry ARQ toàn batch là idempotent nhờ skip doc đã có embedding."""
     from service.embedding import embed_text
-    from db.session import SessionLocal
+    from db.session import SessionLocal, set_tenant_context
     from models.document import Document
-    
+
+    job_try = ctx.get("job_try", 1)
+
     print(f"🔄 [Worker] Batch embedding {len(documents)} documents...")
     results = []
 
@@ -146,30 +148,47 @@ async def generate_embedding_batch_job(ctx, documents: list):
         for doc_data in documents:
             doc_id = doc_data["id"]
             content = doc_data["content"]
-            
+            tenant_id = doc_data.get("tenant_id")
+
             try:
-                # Lock row để tránh Race condition
                 with db.begin():
-                    doc = db.query(Document).filter(Document.id == doc_id).with_for_update(skip_locked=True).first()
+                    if tenant_id is not None:
+                        set_tenant_context(db, tenant_id)
+
+                    doc = (
+                        db.query(Document)
+                        .filter(Document.id == doc_id)
+                        .with_for_update(skip_locked=True)
+                        .first()
+                    )
                     if not doc:
                         results.append({"id": doc_id, "success": False, "error": "Locked or Not found"})
                         continue
-                
-                # Xử lý API
-                # Lưu ý: Trong thực tế batch nên gọi hàm embed batch của OpenAI thay vì lặp to_thread
-                embedding = await asyncio.to_thread(embed_text, content)
-                
-                # Cập nhật kết quả
-                with db.begin():
-                    doc_update = db.query(Document).filter(Document.id == doc_id).first()
-                    if doc_update:
-                        if hasattr(embedding, 'tolist'):
-                            embedding = embedding.tolist()
-                        doc_update.embedding = embedding
-                        results.append({"id": doc_id, "success": True})
-                        
+
+                    if doc.embedding is not None:
+                        results.append({"id": doc_id, "success": True, "note": "already_embedded"})
+                        continue
+
+                    try:
+                        embedding = await asyncio.to_thread(embed_text, content)
+                    except Exception as api_error:
+                        if job_try < MAX_RETRIES:
+                            defer_seconds = (2 ** job_try) + random.uniform(0, 1)
+                            print(
+                                f"⚠️ Batch embed API lỗi doc {doc_id}, retry batch sau {defer_seconds:.2f}s..."
+                            )
+                            raise Retry(defer=defer_seconds) from api_error
+                        raise
+
+                    if hasattr(embedding, "tolist"):
+                        embedding = embedding.tolist()
+                    doc.embedding = embedding
+
+                results.append({"id": doc_id, "success": True})
+
+            except Retry:
+                raise
             except Exception as e:
-                # Với batch, ta ghi nhận lỗi từng record thay vì retry cả lô lớn
                 print(f"❌ Lỗi xử lý doc_id {doc_id} trong batch: {e}")
                 results.append({"id": doc_id, "success": False, "error": str(e)})
 
@@ -178,54 +197,70 @@ async def generate_embedding_batch_job(ctx, documents: list):
 
 
 async def cleanup_old_cache_job(ctx, days: int = 7):
-    """DB Cache Cleanup - Không cần Retry phức tạp"""
+    """DB Cache Cleanup — Redis KEYS có thể block; dùng SCAN + retry khi lỗi mạng Redis."""
     from core.cache import redis_client
-    import time
-    try:
-        print(f"🔄 [Worker] Cleaning up cache older than {days} days...")
-        def _cleanup_sync():
-            pattern = "semantic_cache:*"
-            keys = redis_client.keys(pattern)
-            deleted = 0
-            for key in keys:
-                ttl = redis_client.ttl(key)
-                if ttl == -1:
-                    redis_client.delete(key)
-                    deleted += 1
-            return {"success": True, "deleted": deleted}
 
+    job_try = ctx.get("job_try", 1)
+
+    def _cleanup_sync():
+        deleted = 0
+        index_deleted = 0
+        for key in redis_client.scan_iter("semantic_cache:*"):
+            if key.startswith("semantic_cache:index:"):
+                continue
+            ttl = redis_client.ttl(key)
+            if ttl == -1:
+                redis_client.delete(key)
+                deleted += 1
+        for idx in redis_client.scan_iter("semantic_cache:index:*"):
+            if redis_client.ttl(idx) == -1:
+                redis_client.delete(idx)
+                index_deleted += 1
+        return {"success": True, "deleted": deleted, "index_deleted": index_deleted}
+
+    try:
+        print(f"🔄 [Worker] Cleaning up cache (ttl==-1) older policy days={days}...")
         result = await asyncio.to_thread(_cleanup_sync)
-        print(f"✓ [Worker] Cache cleanup completed: {result.get('deleted', 0)} keys deleted")
+        print(
+            f"✓ [Worker] Cache cleanup: removed {result.get('deleted', 0)} keys, "
+            f"{result.get('index_deleted', 0)} index entries"
+        )
         return result
     except Exception as e:
+        if job_try < MAX_RETRIES:
+            defer_seconds = (2 ** job_try) + random.uniform(0, 1)
+            print(f"⚠️ Cache cleanup lỗi, retry sau {defer_seconds:.2f}s... ({e})")
+            raise Retry(defer=defer_seconds)
         print(f"❌ [Worker] Cache cleanup error: {e}")
         return {"success": False, "error": str(e)}
 
 
 async def generate_daily_stats_job(ctx):
-    """Daily Stats - Sử dụng db.begin() để chỉ đọc an toàn"""
+    """Daily Stats — đọc DB; retry khi lỗi kết nối tạm thời."""
     from db.session import SessionLocal
     from models.conversation import Conversation
     from models.message import Message
     from datetime import datetime, timedelta
-    
+
+    job_try = ctx.get("job_try", 1)
+
     with SessionLocal() as db:
         try:
             print(f"🔄 [Worker] Generating daily statistics...")
             today = datetime.now().date()
             today_start = datetime(today.year, today.month, today.day)
             today_end = today_start + timedelta(days=1)
-            
+
             conversations_today = db.query(Conversation).filter(
                 Conversation.created_at >= today_start,
                 Conversation.created_at < today_end
             ).count()
-            
+
             messages_today = db.query(Message).filter(
                 Message.created_at >= today_start,
                 Message.created_at < today_end
             ).count()
-            
+
             print(f"✓ [Worker] Daily stats: {conversations_today} conversations, {messages_today} messages")
             return {
                 "success": True,
@@ -234,6 +269,10 @@ async def generate_daily_stats_job(ctx):
                 "messages": messages_today
             }
         except Exception as e:
+            if job_try < MAX_RETRIES:
+                defer_seconds = (2 ** job_try) + random.uniform(0, 1)
+                print(f"⚠️ Daily stats lỗi, retry sau {defer_seconds:.2f}s... ({e})")
+                raise Retry(defer=defer_seconds)
             print(f"❌ [Worker] Daily stats error: {e}")
             return {"success": False, "error": str(e)}
 
