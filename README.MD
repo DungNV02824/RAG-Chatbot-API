@@ -59,7 +59,7 @@ TEST_SQL/
 ```
 
 ---
-## 🚀 Cách chạy dự án (Cho người mới)
+## 🚀 Cách chạy dự án 
 
 ### 1) Cài Python & dependencies
 ```powershell
