@@ -54,10 +54,11 @@ app = FastAPI(lifespan=lifespan)
 # 1. CORS Middleware phải nằm trên cùng
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000", "*"],
+    allow_origins=["http://localhost:5173", "http://localhost:5175", "http://localhost:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "x-api-key"], 
+    expose_headers=["X-Conversation-Id", "X-RateLimit-Limit"] 
 )
 
 # 2. Middleware Check API Key
@@ -69,7 +70,10 @@ async def api_key_middleware_wrapper(request: Request, call_next):
         
     # NẾU LÀ API QUẢN TRỊ ADMIN (CRUD Tenants) HOẶC HEALTH CHECK -> BỎ QUA CHECK API KEY
     path = request.url.path
-    if path.startswith("/tenants") or path.startswith("/health") or path.startswith("/docs"):
+    if (path.startswith("/tenants") or 
+        path.startswith("/health") or 
+        path.startswith("/docs") or 
+        path.startswith("/ws")):
         return await call_next(request)
         
     # Các API còn lại (Upload, Chat...) -> Bắt buộc kiểm tra API Key

@@ -103,6 +103,49 @@ def list_users(tenant_id: int = Depends(get_current_tenant_id)):
         db.close()
 
 
+@router.put("/users/{user_id}", tags=["User"])
+def update_user(user_id: int, user_data: UserInfoUpdate, tenant_id: int = Depends(get_current_tenant_id)):
+    """Cập nhật thông tin user theo user_id"""
+    from db.session import set_tenant_context
+
+    db = SessionLocal()
+    set_tenant_context(db, tenant_id)
+
+    try:
+        from models.user import User
+        user = db.query(User).filter(User.id == user_id, User.tenant_id == tenant_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User không tồn tại")
+
+        update_dict = {
+            'name': user_data.name,
+            'email': user_data.email,
+            'phone': user_data.phone,
+            'address': user_data.address,
+        }
+
+        update_user_profile_from_message(db, user, update_dict)
+        set_tenant_context(db, tenant_id)
+        db.refresh(user)
+
+        return {
+            "status": "success",
+            "user_id": user.id,
+            "name": user.full_name,
+            "email": user.email,
+            "phone": user.phone,
+            "address": user.address,
+            "message": "Cập nhật thành công",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f" Lỗi cập nhật user: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
 @router.delete("/users/{user_id}", tags=["User"])
 def delete_user(user_id: int, tenant_id: int = Depends(get_current_tenant_id)):
     """Xóa user và tất cả conversation, message liên quan"""

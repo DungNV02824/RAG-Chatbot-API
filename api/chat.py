@@ -10,7 +10,9 @@ from uuid_utils import uuid4
 from core.config import OPENAI_API_KEY, CHAT_MODEL
 from core.cache import get_cached_response, set_cached_response
 from core.rate_limiter import check_rate_limit
+from core.realtime_staff import broadcast_staff_message
 from db.session import SessionLocal
+from models import conversation
 from service.rag import retrieve_context
 from service.intent_service import is_order_intent, is_escalate_intent
 from service.context_service import build_context_with_summary
@@ -48,8 +50,6 @@ async def stream_response(
     conversation_id: Optional[int] = None,
     pii_mapping: Optional[Dict[str, str]] = None,
 ):
-    # Lưu assistant message trong backend để staff dashboard có thể poll,
-    # thay vì phụ thuộc FE gọi thêm /chat/save-response.
     db = SessionLocal()
     from db.session import set_tenant_context
     set_tenant_context(db, tenant_id)
@@ -112,11 +112,26 @@ async def stream_response(
 
                 if flush_raw:
                     restored_token = restore_text_from_mapping(flush_raw, pii_mapping)
+                    # 1. Bắn cho User (HTTP SSE)
                     yield f"event: message\ndata: {json.dumps({'token': restored_token})}\n\n"
+                    
+                    # 🟢 [THÊM MỚI] 2. Bắn cho Admin (WebSocket) để tạo hiệu ứng gõ chữ
+                    if conversation_id:
+                        await broadcast_staff_message(str(conversation_id), {
+                            "type": "stream",
+                            "token": restored_token
+                        })
 
         if raw_buffer:
             restored_tail = restore_text_from_mapping(raw_buffer, pii_mapping)
             yield f"event: message\ndata: {json.dumps({'token': restored_tail})}\n\n"
+            
+            # 🟢 [THÊM MỚI] Bắn phần text thừa cuối cùng cho Admin
+            if conversation_id:
+                await broadcast_staff_message(str(conversation_id), {
+                    "type": "stream",
+                    "token": restored_tail
+                })
 
         restored_full_response = restore_text_from_mapping(full_response, pii_mapping)
         if usage_total_tokens > 0:
@@ -131,7 +146,18 @@ async def stream_response(
 
         # Persist chatbot response for conversation history
         if conversation_id is not None:
-            save_message(db, conversation_id, "assistant", restored_full_response)
+            bot_msg = save_message(db, conversation_id, "assistant", restored_full_response)
+            
+            # 🟢 [THÊM MỚI] Báo cho Admin biết Bot đã gõ xong, cập nhật lại ID thật từ Database
+            await broadcast_staff_message(str(conversation_id), {
+                "type": "bot_done",
+                "id": getattr(bot_msg, "id", 0),
+                "content": restored_full_response,
+                "role": "assistant",
+                "is_staff_reply": False,
+                "staff_name": "Hệ thống"
+            })
+
         yield f"event: done\ndata: {json.dumps({'full_response': restored_full_response})}\n\n"
 
     except asyncio.CancelledError:
@@ -197,13 +223,11 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 ),
             )
         
-        # ========== SEMANTIC CACHING CHECK ==========
+# ========== SEMANTIC CACHING CHECK ==========
         cached_result = await get_cached_response(tenant_id, req.message)
         if cached_result:
             answer, similarity = cached_result
 
-            # Nếu câu trả lời trong cache chính là câu "đợi nhân viên",
-            # bỏ qua cache để bot được chạy lại bình thường khi đã bật bot.
             waiting_msg = (
                 "Nhân viên support sẽ sớm phản hồi lại anh/chị ạ. Vui lòng chờ xíu nhé!"
             )
@@ -212,15 +236,29 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             else:
                 print(f"✓ Cache HIT: {similarity:.2%} similar | Latency: <100ms | Cost: $0")
                 
-                # đảm bảo anonymous_id không rỗng
                 anonymous_id = req.anonymous_id or str(uuid4())
-
                 user = get_or_create_user_by_anonymous_id(db, anonymous_id, tenant_id)
                 conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
                 
                 if conversation:
-                    save_message(db, conversation.id, "user", req.message)
-                    save_message(db, conversation.id, "assistant", answer)
+                    # Ghi nhận user hỏi vào DB
+                    user_msg = save_message(db, conversation.id, "user", req.message)
+                    # Ghi nhận bot trả lời từ cache vào DB
+                    bot_msg = save_message(db, conversation.id, "assistant", answer)
+                    
+                    # 🟢 [THÊM MỚI] Bắn WS cho Admin thấy User hỏi và Bot (Cache) trả lời
+                    await broadcast_staff_message(str(conversation.id), {
+                        "id": getattr(user_msg, "id", 9999999),
+                        "role": "user",
+                        "content": req.message
+                    })
+                    
+                    await broadcast_staff_message(str(conversation.id), {
+                        "id": getattr(bot_msg, "id", 0),
+                        "role": "assistant",
+                        "content": answer,
+                        "staff_name": "Hệ thống"
+                    })
                 
                 return {
                     "answer": answer,
@@ -231,14 +269,24 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 }
         
         # ========== USER & CONVERSATION ==========
+# ========== USER & CONVERSATION ==========
         user = get_or_create_user_by_anonymous_id(db, req.anonymous_id, tenant_id)
         conversation = get_or_create_conversation(db, tenant_id, user.id) if user else None
 
         if conversation:
             save_message(db, conversation.id, "user", req.message)
-            # `save_message()` có `db.commit()` nên SQLAlchemy có thể release connection
-            # về pool; do đó cần set lại RLS context để tránh `current_setting(...)` rỗng.
             set_tenant_context(db, tenant_id)
+
+            # 🟢 [THÊM MỚI 1] Bắn WS cho Admin thấy tin nhắn của User ngay lập tức
+            # Import hàm broadcast_staff_message ở đầu file nếu chưa có
+            user_payload = {
+                "id": 9999999, # ID tạm để FE render
+                "role": "user",
+                "content": req.message,
+                "conversation_id": conversation.id
+            }
+            # Ép kiểu str(conversation.id) rất quan trọng
+            await broadcast_staff_message(str(conversation.id), user_payload)
 
         # ========== UPDATE USER PROFILE ==========
         if user and (req.name or req.email or req.address or req.phone):
@@ -283,15 +331,25 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 "Anh/chị vui lòng chờ chút xíu nhé!"
             )
             
-            save_message(db, conversation.id, "assistant", escalate_msg)
+            # save_message(db, conversation.id, "assistant", escalate_msg)
+            bot_msg = save_message(db, conversation.id, "assistant", escalate_msg)
+            
+            # 🟢 THÊM: Bắn cho Admin
+            await broadcast_staff_message(str(conversation.id), {
+                "id": getattr(bot_msg, "id", 0),
+                "role": "assistant",
+                "content": escalate_msg,
+                "is_staff_reply": False,
+                "staff_name": "Hệ thống"
+            })
             
             async def fake_stream():
-                # Trả về đúng nguyên văn (giữ newline) để FE tích fullText
-                # khớp với content đã lưu DB, hạn chế lưu trùng.
                 yield f"data: {json.dumps({'token': escalate_msg})}\n\n"
                 yield f"data: {json.dumps({'done': True})}\n\n"
 
-            return StreamingResponse(fake_stream(), media_type="text/event-stream")
+            # Nhét header vào fake_stream
+            headers = {"X-Conversation-Id": str(conversation.id)} if conversation else {}
+            return StreamingResponse(fake_stream(), media_type="text/event-stream", headers=headers)
         
         # ========== CHECK ORDER INTENT ==========
         if user and conversation and is_order_intent(req.message):
@@ -310,13 +368,21 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         if conversation and conversation.disable_bot_response:
             print(f" Bot response disabled for conversation #{conversation.id}")
             waiting_msg = "Nhân viên support sẽ sớm phản hồi lại anh/chị ạ. Vui lòng chờ xíu nhé!"
-            save_message(db, conversation.id, "assistant", waiting_msg)
+            bot_msg = save_message(db, conversation.id, "assistant", waiting_msg)
+            
+            # ✅ THÊM MỚI: Bắn thông báo của hệ thống cho Admin biết
+            await broadcast_staff_message(str(conversation.id), {
+                "id": getattr(bot_msg, "id", 0),
+                "role": "assistant",
+                "content": waiting_msg,
+                "staff_name": "Hệ thống"
+            })
+            
             return {
                 "answer": waiting_msg,
                 "type": "waiting_for_staff",
                 "conversation_id": conversation.id
             }
-
         # ========== SLIDING WINDOW CONTEXT ==========
         if conversation:
             context_data = build_context_with_summary(db, conversation.id)
@@ -333,10 +399,20 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 "Anh/chị vui lòng mô tả lại nhu cầu sản phẩm/dịch vụ theo cách bình thường nhé."
             )
             if conversation:
-                save_message(db, conversation.id, "assistant", blocked_msg)
+                bot_msg = save_message(db, conversation.id, "assistant", blocked_msg)
+                
+                # 🟢 THÊM: Bắn cho Admin
+                await broadcast_staff_message(str(conversation.id), {
+                    "id": getattr(bot_msg, "id", 0),
+                    "role": "assistant",
+                    "content": blocked_msg,
+                    "is_staff_reply": False,
+                    "staff_name": "Hệ thống"
+                })
             return {
                 "answer": blocked_msg,
-                "type": "guardrail_blocked"
+                "type": "guardrail_blocked",
+                "conversation_id": conversation.id if conversation else None # 🔥 THÊM DÒNG NÀY
             }
 
         chat_history, history_guardrail = sanitize_untrusted_history(chat_history)
@@ -352,7 +428,15 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
         if images:
             answer_msg = "Dưới đây là hình ảnh sản phẩm anh/chị yêu cầu ạ."
             if conversation:
-                save_message(db, conversation.id, "assistant", answer_msg)
+                bot_msg = save_message(db, conversation.id, "assistant", answer_msg)
+                 # 🟢 THÊM: Bắn cho Admin
+                await broadcast_staff_message(str(conversation.id), {
+                    "id": getattr(bot_msg, "id", 0),
+                    "role": "assistant",
+                    "content": answer_msg,
+                    "is_staff_reply": False,
+                    "staff_name": "Hệ thống"
+                })
             return {
                 "answer": answer_msg,
                 "images": images,
@@ -385,11 +469,21 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             )
             
             if conversation:
-                save_message(db, conversation.id, "assistant", not_found_msg)
+                bot_msg = save_message(db, conversation.id, "assistant", not_found_msg)
+                
+                # 🟢 THÊM: Bắn cho Admin
+                await broadcast_staff_message(str(conversation.id), {
+                    "id": getattr(bot_msg, "id", 0),
+                    "role": "assistant",
+                    "content": not_found_msg,
+                    "is_staff_reply": False,
+                    "staff_name": "Hệ thống"
+                })
             
             return {
                 "answer": not_found_msg,
-                "type": "escalated"
+                "type": "escalated",
+                "conversation_id": conversation.id if conversation else None # 🔥 THÊM DÒNG NÀY
             }
 
         # ========== SANITIZATION - MASK PII BEFORE LLM ==========
@@ -439,13 +533,9 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
             "- Trả lời tự nhiên như người thực; xưng 'em', gọi khách là 'anh/chị'.\n"
             "- Giọng thân thiện, rõ ràng, không máy móc, không bullet khô khan."
         )
-        
+ 
         # ========== STREAM RESPONSE ==========
-        print(
-            f" Streaming response (tenant={tenant_id}, "
-            f"conversation_id={conversation.id if conversation else None}, "
-            f"sanitized_preview={redact_pii_for_log((req.message or '')[:80])!r})"
-        )
+        print(f" Streaming response (tenant={tenant_id}, conversation_id={conversation.id if conversation else None})")
         
         try:
             response = StreamingResponse(
@@ -462,10 +552,11 @@ async def chat(req: ChatRequestDTO, tenant_id: int = Depends(get_current_tenant_
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
+                    "X-Accel-Buffering": "no",
+                    # 🟢 [THÊM MỚI 2] Nhét conversation_id vào Header để React lấy được
+                    "X-Conversation-Id": str(conversation.id) if conversation else ""
                 }
             )
-            
             return response
             
         except asyncio.CancelledError:

@@ -17,27 +17,52 @@ from core.realtime_staff import conversation_connections, broadcast_staff_messag
 router = APIRouter()
 
 
-@router.websocket("/ws/staff-messages/{conversation_id}")
-async def staff_messages_ws(websocket: WebSocket, conversation_id: int):
-    """
-    WebSocket cho phía user subscribe tin nhắn của nhân viên theo conversation_id.
-    """
-    await websocket.accept()
-    cid = int(conversation_id)
-    conversation_connections.setdefault(cid, []).append(websocket)
+# @router.websocket("/ws/staff-messages/{conversation_id}")
+# async def staff_messages_ws(websocket: WebSocket, conversation_id: int):
+#     """
+#     WebSocket cho phía user subscribe tin nhắn của nhân viên theo conversation_id.
+#     """
+#     await websocket.accept()
+#     cid = int(conversation_id)
+#     conversation_connections.setdefault(cid, []).append(websocket)
 
+#     try:
+#         # Giữ kết nối mở; client có thể gửi ping, nhưng ta chỉ cần chờ receive.
+#         while True:
+#             await websocket.receive_text()
+#     except WebSocketDisconnect:
+#         pass
+#     finally:
+#         conns = conversation_connections.get(cid, [])
+#         if websocket in conns:
+#             conns.remove(websocket)
+#         if not conns:
+#             conversation_connections.pop(cid, None)
+
+# 2. ENDPOINT MỞ KẾT NỐI WS (Cũng bọc ép kiểu String)
+@router.websocket("/ws/staff-messages/{conversation_id}")
+async def websocket_endpoint(websocket: WebSocket, conversation_id: str):
+    await websocket.accept()
+    
+    # Ép kiểu về str
+    cid_str = str(conversation_id)
+    
+    if cid_str not in conversation_connections:
+        conversation_connections[cid_str] = []
+    conversation_connections[cid_str].append(websocket)
+    
+    print(f"\n🟢 [WS KẾT NỐI] Có người VỪA VÀO phòng '{cid_str}'. Tổng số: {len(conversation_connections[cid_str])} người")
+    
     try:
-        # Giữ kết nối mở; client có thể gửi ping, nhưng ta chỉ cần chờ receive.
         while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        conns = conversation_connections.get(cid, [])
-        if websocket in conns:
-            conns.remove(websocket)
-        if not conns:
-            conversation_connections.pop(cid, None)
+            # Vòng lặp giữ kết nối không bị văng
+            data = await websocket.receive_text()
+    except Exception as e:
+        print(f"🔴 [WS ĐÓNG] Có người rời phòng '{cid_str}'")
+        if websocket in conversation_connections.get(cid_str, []):
+            conversation_connections[cid_str].remove(websocket)
+        if not conversation_connections.get(cid_str):
+            conversation_connections.pop(cid_str, None)
 
 @router.get("/staff/escalations", tags=["Staff Support"])
 def get_escalations_list(tenant_id: int = Depends(get_current_tenant_id), status: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=100)):
@@ -298,12 +323,13 @@ async def staff_reply(req: StaffReplyRequestDTO, tenant_id: int = Depends(get_cu
         }
 
         # Phát realtime tới phía user nếu có WebSocket đang mở
-        await broadcast_staff_message(req.conversation_id, payload)
+        await broadcast_staff_message(str(req.conversation_id), payload)
 
         return {
             "success": True,
             "message": payload,
         }
+    
     except HTTPException:
         raise
     except Exception as e:
