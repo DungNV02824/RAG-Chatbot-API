@@ -1,10 +1,5 @@
-"""
-Async worker queue for handling heavy tasks.
-This module defines all async jobs that are executed by ARQ workers.
-
-To run workers:
-    arq workers.WorkerSettings
-"""
+import os
+from dotenv import load_dotenv
 
 from arq import Retry
 import asyncio
@@ -12,6 +7,16 @@ import random
 import sys
 from models.tenant import Tenant 
 from models.document import Document
+from arq.connections import RedisSettings
+
+# Load các biến môi trường từ file .env
+load_dotenv()
+
+# Lấy cấu hình Redis từ biến môi trường (nếu không có thì dùng mặc định)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+
 
 # Cấu hình Retry chung
 MAX_RETRIES = 5
@@ -276,7 +281,7 @@ async def generate_daily_stats_job(ctx):
             print(f"❌ [Worker] Daily stats error: {e}")
             return {"success": False, "error": str(e)}
 
-
+# ========== WORKER SETTINGS ==========
 # ========== WORKER SETTINGS ==========
 class WorkerSettings:
     """Configuration for ARQ worker"""
@@ -290,14 +295,26 @@ class WorkerSettings:
         generate_daily_stats_job
     ]
     
+    # --- CẤU HÌNH REDIS CHUẨN CHO ARQ ---
+    redis_settings = RedisSettings(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        
+        # Tên tham số đúng của arq là conn_timeout
+        conn_timeout=10, 
+        
+        # Lưu ý: KHÔNG thêm conn_kwargs vào đây vì arq không hỗ trợ
+    )
+    # -----------------------------------------------
+    
     concurrent_jobs = 5
     job_timeout = 3600
     health_check_interval = 30
     log_level = "INFO"
     
-    # Số lần thử tối đa mặc định của ARQ (Dự phòng nếu logic code không handle)
-    max_tries = 5 
-
+    # Số lần thử tối đa mặc định của ARQ
+    max_tries = 5
 
 # ========== TEST FUNCTION ==========
 async def test_worker():
