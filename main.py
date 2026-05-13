@@ -8,6 +8,7 @@ from api.user import router as user_router
 from api.escalation import router as escalation_router
 from api.tenant import router as tenant_router
 from api.staff import router as staff_router
+from api.payment import router as payment_router
 
 
 # ========== STARTUP & SHUTDOWN EVENTS ==========
@@ -73,7 +74,8 @@ async def api_key_middleware_wrapper(request: Request, call_next):
     if (path.startswith("/tenants") or 
         path.startswith("/health") or 
         path.startswith("/docs") or 
-        path.startswith("/ws")):
+        path.startswith("/ws") or
+        path.startswith("/payment")):  # PayMailHook webhook - xác thực bằng secretKey riêng
         return await call_next(request)
         
     # Các API còn lại (Upload, Chat...) -> Bắt buộc kiểm tra API Key
@@ -86,6 +88,7 @@ app.include_router(user_router)
 app.include_router(escalation_router)
 app.include_router(tenant_router)
 app.include_router(staff_router)
+app.include_router(payment_router)
 
 @app.get("/health")
 def health():

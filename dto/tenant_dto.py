@@ -18,11 +18,17 @@ class TenantUpdate(BaseModel):
     description: Optional[str] = None
     api_key: Optional[str] = None
     is_active: Optional[bool] = None
+    pmh_secret_key: Optional[str] = None  # Secret Key từ PayMailHook
+    pmh_prefix: Optional[str] = None      # Tiền tố mã đơn hàng (VD: "TT")
+    subscription_expires_at: Optional[datetime] = None  # Ngày hết hạn subscription
 
 # Schema trả về cho Bảng danh sách UI (GET)
 class TenantResponse(TenantBase):
     id: int
     is_active: bool
+    pmh_secret_key: Optional[str] = None
+    pmh_prefix: Optional[str] = None
+    subscription_expires_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

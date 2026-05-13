@@ -1,10 +1,8 @@
 # 1. THÊM CHỮ 'Query' VÀO ĐÂY (CỦA FASTAPI)
 from fastapi import APIRouter, Depends, HTTPException, status, Query 
-# THÊM IMPORT NÀY ĐỂ FIX LỖI SERIALIZE
 from fastapi.encoders import jsonable_encoder 
 from typing import List
-
-# 2. XÓA CHỮ 'Query' Ở ĐÂY CHỈ ĐỂ LẠI 'Session'
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session 
 
 # Import từ các file của bạn (sửa đường dẫn cho khớp project)
@@ -92,10 +90,35 @@ def delete_tenant(tenant_id: int, db: Session = Depends(get_db)):
 
     db.delete(tenant)
     db.commit()
-    
-    # ĐÃ SỬA LỖI HTTP: Trạng thái 204 (NO CONTENT) bắt buộc KHÔNG ĐƯỢC trả về body. 
-    # Nếu bạn return {"message": ...} ở đây, client có thể báo lỗi parsing JSON.
     return None
+
+
+# 5. API POST: Gia hạn subscription thủ công (dành cho admin)
+@router.post("/{tenant_id}/renew", response_model=TenantResponse)
+def renew_tenant_subscription(
+    tenant_id: int,
+    days: int = Query(30, ge=1, le=365, description="Số ngày gia hạn"),
+    db: Session = Depends(get_db)
+):
+    """
+    Gia hạn subscription cho tenant.
+    - Nếu còn hạn: cộng thêm từ ngày hiện tại hết hạn
+    - Nếu đã hết hạn / chưa có: tính từ hôm nay
+    """
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Không tìm thấy Tenant")
+
+    now = datetime.utcnow()
+    base = tenant.subscription_expires_at if (
+        tenant.subscription_expires_at and tenant.subscription_expires_at > now
+    ) else now
+
+    tenant.subscription_expires_at = base + timedelta(days=days)
+    tenant.is_active = True
+    db.commit()
+    db.refresh(tenant)
+    return tenant
 
 
     
